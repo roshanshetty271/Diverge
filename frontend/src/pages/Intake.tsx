@@ -30,22 +30,25 @@ export default function Intake() {
   const initial = (location.state || {}) as { pathA?: string; pathB?: string; templateId?: string };
 
   const { toast } = useToast();
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(0);
+  const [userName, setUserName] = useState("");
   const [pathA, setPathA] = useState(initial.pathA || "");
   const [pathB, setPathB] = useState(initial.pathB || "");
   const [salary, setSalary] = useState("");
   const [salaryNew, setSalaryNew] = useState("");
   const [savings, setSavings] = useState("");
+  const [context, setContext] = useState("");
   const [values, setValues] = useState<string[]>([]);
   const [writingSample, setWritingSample] = useState("");
 
   const showMoney = isFinancialDecision(pathA, pathB, initial.templateId);
-  const totalSteps = showMoney ? 3 : 2;
 
+  const totalSteps = showMoney ? 4 : 3;
   const displayStep = () => {
-    if (step === 1) return 1;
-    if (step === 2) return 2;
-    return showMoney ? 3 : 2;
+    if (step === 0) return 1;
+    if (step === 1) return 2;
+    if (step === 2) return 3;
+    return showMoney ? 4 : 3;
   };
 
   const startDebate = () => {
@@ -55,10 +58,12 @@ export default function Intake() {
     const payload: DecisionInput = {
       path_a: sanitizeInput(pathA),
       path_b: sanitizeInput(pathB),
+      user_name: userName.trim() || null,
       financial_context: salary || salaryNew || savings
         ? `Current income: $${sanitizeFinancialInput(salary) || "unknown"}/yr. New path income: $${sanitizeFinancialInput(salaryNew) || "unknown"}/yr. Savings: $${sanitizeFinancialInput(savings) || "unknown"}.`
         : null,
       values: values.length > 0 ? values.join(", ") : null,
+      constraints: sanitizeInput(context) || null,
       writing_samples: sanitizeInput(writingSample) || null,
     };
     navigate("/loading", { state: payload });
@@ -78,9 +83,34 @@ export default function Intake() {
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-16">
       <div className="w-full max-w-lg">
         <AnimatePresence mode="wait">
+          {step === 0 && (
+            <motion.div key="step0" variants={slideVariants} initial="enter" animate="center" exit="exit" transition={{ duration: 0.6 }}>
+              <h1 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>What should we call you?</h1>
+              <p className="text-ivory-dim text-sm mt-2">Makes the debate feel like it's actually about you.</p>
+              <input
+                type="text" value={userName} onChange={(e) => setUserName(e.target.value.slice(0, 50))}
+                placeholder="First name"
+                aria-label="Your name"
+                autoFocus
+                onKeyDown={(e) => e.key === "Enter" && setStep(1)}
+                className="w-full mt-8 bg-surface border border-surface-light rounded-lg p-4 text-ivory text-base focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
+              />
+              <div className="flex gap-3 mt-8">
+                <button onClick={() => setStep(1)} className="flex-1 py-3 px-6 rounded-lg text-sm bg-path-risk text-void font-medium cursor-pointer transition-opacity duration-200">
+                  {userName.trim() ? `Hey, ${userName.trim()}` : "Continue"} &rarr;
+                </button>
+                <button onClick={() => setStep(1)} className="flex-1 py-3 px-6 rounded-lg text-sm bg-transparent border border-surface-light text-ivory-dim hover:border-ivory-dim transition-colors duration-200 cursor-pointer">
+                  Skip
+                </button>
+              </div>
+            </motion.div>
+          )}
+
           {step === 1 && (
             <motion.div key="step1" variants={slideVariants} initial="enter" animate="center" exit="exit" transition={{ duration: 0.6 }}>
-              <h1 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>Got it. You&rsquo;re deciding between:</h1>
+              <h1 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>
+                {userName.trim() ? `${userName.trim()}, you're deciding between:` : "You\u2019re deciding between:"}
+              </h1>
               <div className="mt-8 space-y-3">
                 <input type="text" value={pathA} onChange={(e) => setPathA(e.target.value)} placeholder="Option A&#x2026;" aria-label="Option A"
                   className="w-full bg-surface border border-surface-light rounded-lg p-4 text-ivory text-base focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200" />
@@ -96,6 +126,7 @@ export default function Intake() {
               </div>
             </motion.div>
           )}
+
           {step === 2 && (
             <motion.div key="step2" variants={slideVariants} initial="enter" animate="center" exit="exit" transition={{ duration: 0.6 }}>
               <h2 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>The money stuff</h2>
@@ -118,12 +149,26 @@ export default function Intake() {
               </div>
             </motion.div>
           )}
+
           {step === 3 && (
             <motion.div key="step3" variants={slideVariants} initial="enter" animate="center" exit="exit" transition={{ duration: 0.6 }}>
-              <h2 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>What matters most?</h2>
-              <p className="text-ivory-dim text-sm mt-1">Pick up to 3.</p>
-              <div className="mt-4"><ValuesChips selected={values} onChange={setValues} /></div>
-              <div className="mt-10">
+              <h2 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>What&rsquo;s the situation?</h2>
+              <p className="text-ivory-dim text-sm mt-1">Why is this decision hard? Any background that would help.</p>
+              <textarea
+                value={context}
+                onChange={(e) => setContext(e.target.value.slice(0, 500))}
+                placeholder="e.g. I've been thinking about this for months. The thing that scares me is&#x2026;"
+                rows={3}
+                className="w-full mt-4 bg-surface border border-surface-light rounded-lg p-4 text-ivory text-sm leading-relaxed resize-none focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
+              />
+              <p className="text-ivory-faint text-[11px] font-mono text-right mt-1">{context.length} / 500</p>
+
+              <div className="mt-8">
+                <h2 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>What matters most?</h2>
+                <p className="text-ivory-dim text-sm mt-1">Pick up to 3.</p>
+                <div className="mt-4"><ValuesChips selected={values} onChange={setValues} /></div>
+              </div>
+              <div className="mt-8">
                 <h2 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>How do you talk?</h2>
                 <p className="text-ivory-dim text-sm mt-1">Paste a few texts or emails that sound like you. This makes the debate personal.</p>
                 <div className="mt-4"><WritingSampleInput value={writingSample} onChange={setWritingSample} /></div>

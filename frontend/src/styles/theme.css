@@ -82,41 +82,7 @@ input[type="number"] {
   animation: fade-up 0.6s ease both;
 }
 
-/* Atmospheric smoke/wisp background -- ultra-subtle light leaks */
+/* Subtle vignette -- darker edges, slightly lifted center */
 .bg-atmosphere {
-  position: relative;
-  overflow: hidden;
-}
-
-.bg-atmosphere::before,
-.bg-atmosphere::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.bg-atmosphere::before {
-  background:
-    radial-gradient(ellipse 600px 400px at 25% 40%, rgba(212,168,67,0.025) 0%, transparent 70%),
-    radial-gradient(ellipse 500px 350px at 75% 60%, rgba(74,111,165,0.025) 0%, transparent 70%);
-  animation: atmosphere-drift-1 25s ease-in-out infinite alternate;
-}
-
-.bg-atmosphere::after {
-  background:
-    radial-gradient(ellipse 450px 300px at 60% 30%, rgba(74,111,165,0.02) 0%, transparent 70%),
-    radial-gradient(ellipse 550px 400px at 35% 70%, rgba(212,168,67,0.02) 0%, transparent 70%);
-  animation: atmosphere-drift-2 30s ease-in-out infinite alternate;
-}
-
-@keyframes atmosphere-drift-1 {
-  from { transform: translate(0, 0) scale(1); }
-  to { transform: translate(30px, -20px) scale(1.05); }
-}
-
-@keyframes atmosphere-drift-2 {
-  from { transform: translate(0, 0) scale(1.05); }
-  to { transform: translate(-25px, 15px) scale(1); }
+  background: radial-gradient(ellipse at center, #111 0%, #0a0a0a 70%);
 }

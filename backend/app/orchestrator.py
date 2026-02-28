@@ -17,7 +17,11 @@ import logging
 from strands import Agent
 
 from app.config import get_settings
-from app.agents.prompts import get_rounds, detect_decision_category, build_alpha_prompt, build_beta_prompt, VERDICT_PROMPT
+from app.agents.prompts import (
+    get_rounds, detect_decision_category, detect_brave_path,
+    build_alpha_prompt, build_beta_prompt, build_verdict_prompt,
+    PERSONA_CHALLENGER, PERSONA_DEFENDER, PERSONA_EQUAL,
+)
 from app.agents.metrics import extract_metrics
 from app.schemas import RoundResult, RoundMetrics, DebateResponse
 from app.tools.monte_carlo import monte_carlo_financial
@@ -87,6 +91,25 @@ def _safe_agent_output(result) -> str:
     return text.strip()
 
 
+def _assign_personas(brave: str, user_ctx: dict) -> tuple[dict, dict]:
+    """Assign personas to alpha (path_a) and beta (path_b) based on bravery detection.
+
+    For neutral decisions: devil's advocate if no values, values-based if values exist.
+    """
+    if brave == "a":
+        return PERSONA_CHALLENGER, PERSONA_DEFENDER
+    if brave == "b":
+        return PERSONA_DEFENDER, PERSONA_CHALLENGER
+
+    values = user_ctx.get("values") or ""
+    if values:
+        return PERSONA_EQUAL, PERSONA_EQUAL
+
+    # No values, neutral paths: beta plays devil's advocate (challenges path_a, which
+    # the user likely leans toward since they listed it first)
+    return PERSONA_EQUAL, PERSONA_CHALLENGER
+
+
 def _run_round(
     round_info: dict,
     user_ctx: dict,
@@ -94,6 +117,8 @@ def _run_round(
     round_num: int,
     debate_summary: str,
     tools: list,
+    alpha_persona: dict,
+    beta_persona: dict,
 ) -> RoundResult:
     """Execute one debate round with smart retry logic."""
     alpha_response = ""
@@ -105,17 +130,26 @@ def _run_round(
         try:
             alpha_agent = Agent(
                 model=_make_model(),
-                system_prompt=build_alpha_prompt(user_ctx, round_info),
+                system_prompt=build_alpha_prompt(user_ctx, round_info, alpha_persona),
                 tools=tools,
             )
+            path_a = user_ctx["path_a"]
+            path_b = user_ctx["path_b"]
+            timeline = round_info.get("timeline", f"round {round_num + 1}")
+
             if round_num == 0:
-                alpha_input = f"{summary_prefix}Give your opening statement about this path."
+                alpha_input = (
+                    f"{summary_prefix}"
+                    f"You chose \"{path_a}\". It's {timeline}. "
+                    f"Give your opening statement — what happened?"
+                )
             else:
                 alpha_input = (
                     f"{summary_prefix}"
-                    f"The other version of you just said:\n\n"
+                    f"You chose \"{path_a}\". It's now {timeline}.\n\n"
+                    f"The version of you who chose \"{path_b}\" just said:\n\n"
                     f"\"{prev_beta}\"\n\n"
-                    f"Respond to their points and make your case for this round."
+                    f"Fight back. What's YOUR reality at {timeline}?"
                 )
             raw_alpha = alpha_agent(alpha_input)
             alpha_response = validate_agent_output(_safe_agent_output(raw_alpha))
@@ -125,14 +159,15 @@ def _run_round(
 
             beta_agent = Agent(
                 model=_make_model(),
-                system_prompt=build_beta_prompt(user_ctx, round_info),
+                system_prompt=build_beta_prompt(user_ctx, round_info, beta_persona),
                 tools=tools,
             )
             raw_beta = beta_agent(
                 f"{summary_prefix}"
-                f"The other version of you just said:\n\n"
+                f"You chose \"{path_b}\". It's now {timeline}.\n\n"
+                f"The version of you who chose \"{path_a}\" just said:\n\n"
                 f"\"{alpha_response}\"\n\n"
-                f"Respond to their points and make your case."
+                f"Fight back. What's YOUR reality at {timeline}?"
             )
             beta_response = validate_agent_output(_safe_agent_output(raw_beta))
 
@@ -187,12 +222,7 @@ def _generate_verdict(transcript: list[RoundResult], user_ctx: dict) -> str:
     if not full_text.strip():
         return "The debate could not produce enough content for a verdict."
 
-    prompt = VERDICT_PROMPT.format(
-        transcript=full_text,
-        path_a=user_ctx["path_a"],
-        path_b=user_ctx["path_b"],
-        values=user_ctx.get("values") or "not specified",
-    )
+    prompt = build_verdict_prompt(user_ctx, full_text)
 
     for attempt in range(2):
         try:
@@ -225,23 +255,28 @@ def run_debate(user_context: dict) -> DebateResponse:
     debate_summary = ""
 
     category = detect_decision_category(user_context["path_a"], user_context["path_b"])
+    brave = detect_brave_path(user_context["path_a"], user_context["path_b"])
+    alpha_persona, beta_persona = _assign_personas(brave, user_context)
     rounds = get_rounds(category)
     tools = FINANCIAL_TOOLS if category == "financial" else []
 
-    logger.info(f"Starting debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} (category={category})")
+    logger.info(
+        f"Starting debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
+        f"(category={category}, brave={brave}, alpha={alpha_persona['label']}, beta={beta_persona['label']})"
+    )
     start_time = time.time()
 
     for i, round_info in enumerate(rounds):
         logger.info(f"Debate {debate_id}: Starting round {i + 1} ({round_info['name']})")
-        result = _run_round(round_info, user_context, prev_beta, i, debate_summary, tools)
+        result = _run_round(round_info, user_context, prev_beta, i, debate_summary, tools, alpha_persona, beta_persona)
         transcript.append(result)
         all_metrics.append(result.metrics)
         prev_beta = result.beta if result.status == "completed" else prev_beta
 
         if result.status == "completed":
             debate_summary += f"\n[Round {i + 1} - {round_info['name']}]\n"
-            debate_summary += f"Path A argued: {result.alpha[:200]}...\n"
-            debate_summary += f"Path B argued: {result.beta[:200]}...\n"
+            debate_summary += f"Path A argued: {result.alpha[:400]}...\n"
+            debate_summary += f"Path B argued: {result.beta[:400]}...\n"
 
         logger.info(f"Debate {debate_id}: Round {i + 1} {result.status}")
 

@@ -67,7 +67,9 @@ export default function Loading() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 relative bg-atmosphere">
       <div className="relative z-10 text-center max-w-md">
-        <motion.p initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8 }} className="font-display text-xl text-ivory leading-relaxed" style={{ fontWeight: 400 }}>Two versions of your future self are preparing their case.</motion.p>
+        <motion.p initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8 }} className="font-display text-xl text-ivory leading-relaxed" style={{ fontWeight: 400 }}>
+          {payload?.user_name ? `${payload.user_name}, two` : "Two"} versions of your future self are preparing their case.
+        </motion.p>
         <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5, duration: 0.6 }} className="text-ivory-dim text-sm mt-3">This takes about a minute.</motion.p>
         <div className="mt-14"><DarkQuote intervalMs={5000} /></div>
         <div className="mt-14 flex flex-col items-center">

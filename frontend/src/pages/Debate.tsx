@@ -1,10 +1,11 @@
-import { useState, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import AgentMessage from "../components/AgentMessage";
 import RoundNav from "../components/RoundNav";
 import { ROUNDS } from "../utils/constants";
 import { loadDebateState } from "../utils/debateStorage";
+import { getVoicePair, stopSpeaking } from "../utils/tts";
 import type { DebateResponse, DecisionInput } from "../types";
 
 const DecisionRadar = lazy(() => import("../components/DecisionRadar"));
@@ -28,6 +29,31 @@ export default function Debate() {
 
   const [currentRound, setCurrentRound] = useState(1);
   const [activeChart, setActiveChart] = useState<ChartTab>("Radar");
+  const [visibleMessages, setVisibleMessages] = useState(0);
+  const [skipped, setSkipped] = useState(false);
+
+  const userName = input?.user_name || null;
+  const [voiceA, voiceB] = getVoicePair(userName);
+
+  const revealAll = useCallback(() => {
+    setVisibleMessages(2);
+    setSkipped(true);
+  }, []);
+
+  useEffect(() => {
+    setVisibleMessages(0);
+    setSkipped(false);
+    stopSpeaking();
+
+    const t1 = setTimeout(() => setVisibleMessages(1), 500);
+    const t2 = setTimeout(() => setVisibleMessages(2), 2500);
+
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [currentRound]);
+
+  useEffect(() => {
+    return () => stopSpeaking();
+  }, []);
 
   if (!debate || !debate.transcript) {
     return (
@@ -43,23 +69,26 @@ export default function Debate() {
   const round = transcript[safeRound - 1];
   const roundName = round?.round_name || ROUNDS[safeRound - 1]?.name || `Round ${safeRound}`;
   const roundTitle = round?.round_title || ROUNDS[safeRound - 1]?.title || "";
-  const roundDescription = ROUNDS[safeRound - 1]?.description || "";
   const completedRounds = transcript.map((_, i) => i + 1);
   const pathAName = input?.path_a || "Option A";
   const pathBName = input?.path_b || "Option B";
 
-  const safeLabel = `The You Who Chose: ${pathAName.length > 30 ? pathAName.slice(0, 30) + "\u2026" : pathAName}`;
-  const riskLabel = `The You Who Chose: ${pathBName.length > 30 ? pathBName.slice(0, 30) + "\u2026" : pathBName}`;
+  const safeLabel = pathAName.length > 30 ? pathAName.slice(0, 30) + "\u2026" : pathAName;
+  const riskLabel = pathBName.length > 30 ? pathBName.slice(0, 30) + "\u2026" : pathBName;
   const currentMetrics = allMetrics[safeRound - 1];
   const nextRound = transcript[safeRound];
   const nextRoundName = nextRound?.round_name || ROUNDS[safeRound]?.name;
   const activeTabInfo = CHART_TABS.find((t) => t.key === activeChart)!;
 
+  const heading = userName ? `${userName}\u2019s Decision` : "The Debate";
+
   return (
     <div className="min-h-screen bg-void px-4 py-8 md:px-8">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-3xl mx-auto">
 
-        {/* Step indicator — reads names from API response, falls back to ROUNDS */}
+        <p className="text-center text-ivory-faint text-xs font-mono uppercase tracking-widest mb-1">{heading}</p>
+
+        {/* Step indicator */}
         <div className="flex justify-center items-center gap-1 mb-8">
           {transcript.map((r, i) => {
             const stepNum = i + 1;
@@ -86,58 +115,74 @@ export default function Debate() {
           })}
         </div>
 
-        {/* Round header — uses API round_name and round_title */}
-        <div className="text-center mb-10">
+        {/* Round header */}
+        <div className="text-center mb-8">
           <p className="text-ivory-faint text-xs font-mono uppercase tracking-widest">Round {safeRound} of {transcript.length}</p>
           <h1 className="font-display text-2xl md:text-3xl text-ivory mt-1" style={{ fontWeight: 400 }}>{roundName}</h1>
           <p className="text-ivory-dim text-sm mt-1">{roundTitle}</p>
-          {roundDescription && (
-            <p className="text-ivory-faint text-xs mt-2 italic">{roundDescription}</p>
-          )}
           {round?.status === "partial" && <p className="text-path-risk text-xs mt-2 font-mono">This round was only partially generated</p>}
         </div>
 
-        {/* Debate columns */}
+        {/* Chat bubbles */}
         <AnimatePresence mode="wait">
-          <motion.div key={safeRound} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.6 }} className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
-            <AgentMessage agentName={safeLabel} message={round?.alpha || ""} variant="safe" />
-            <AgentMessage agentName={riskLabel} message={round?.beta || ""} variant="risk" />
+          <motion.div key={safeRound} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }} className="space-y-5">
+            {visibleMessages >= 1 && (
+              <AgentMessage agentName={safeLabel} message={round?.alpha || ""} variant="safe" voiceId={voiceA} />
+            )}
+            {visibleMessages >= 2 && (
+              <AgentMessage agentName={riskLabel} message={round?.beta || ""} variant="risk" voiceId={voiceB} />
+            )}
           </motion.div>
         </AnimatePresence>
 
-        {/* Charts */}
-        <div className="mt-10">
-          <div className="flex gap-1 mb-2">
-            {CHART_TABS.map((tab) => (
-              <button key={tab.key} onClick={() => setActiveChart(tab.key)}
-                className={`px-4 py-2 text-xs font-mono uppercase tracking-wider transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk rounded ${activeChart === tab.key ? "text-ivory border-b-2 border-path-risk" : "text-ivory-faint border-b-2 border-transparent hover:text-ivory-dim"}`}>
-                {tab.label}
+        {/* Skip button */}
+        {visibleMessages < 2 && !skipped && (
+          <div className="mt-4 text-center">
+            <button onClick={revealAll} className="text-ivory-faint text-xs font-mono hover:text-ivory-dim transition-colors cursor-pointer">
+              Skip &rarr;
+            </button>
+          </div>
+        )}
+
+        {/* Next / Verdict button — immediately after messages */}
+        {visibleMessages >= 2 && (
+          <div className="mt-8 text-center">
+            {safeRound < transcript.length ? (
+              <button onClick={() => setCurrentRound((p) => p + 1)} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim hover:border-path-risk hover:text-ivory transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk">
+                {nextRoundName ? `Next: ${nextRoundName}` : "Next round"} &rarr;
               </button>
-            ))}
+            ) : (
+              <button onClick={() => navigate("/verdict", { state: { debate, input } })} className="px-8 py-3 rounded-lg text-sm bg-path-risk text-void font-medium transition-[opacity,box-shadow] duration-200 cursor-pointer hover:shadow-[0_0_20px_rgba(212,168,67,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-risk focus-visible:ring-offset-2 focus-visible:ring-offset-void">See the Verdict</button>
+            )}
           </div>
-          <p className="text-ivory-faint text-[11px] font-mono mb-3 pl-1">{activeTabInfo.description}</p>
-          <div className="bg-surface rounded-lg border border-surface-light p-4 md:p-6">
-            <Suspense fallback={<div className="h-[280px] flex items-center justify-center text-ivory-faint text-sm font-mono">Loading chart&hellip;</div>}>
-              {activeChart === "Radar" && <DecisionRadar metricsA={currentMetrics?.path_a || null} metricsB={currentMetrics?.path_b || null} pathAName={pathAName} pathBName={pathBName} />}
-              {activeChart === "Timeline" && <TimelineChart allMetrics={allMetrics.slice(0, safeRound)} pathAName={pathAName} pathBName={pathBName} />}
-              {activeChart === "Regret" && <RegretChart allMetrics={allMetrics.slice(0, safeRound)} pathAName={pathAName} pathBName={pathBName} />}
-            </Suspense>
+        )}
+
+        {/* Charts — below nav button for optional exploration */}
+        {visibleMessages >= 2 && (
+          <div className="mt-10">
+            <div className="flex gap-1 mb-2">
+              {CHART_TABS.map((tab) => (
+                <button key={tab.key} onClick={() => setActiveChart(tab.key)}
+                  className={`px-4 py-2 text-xs font-mono uppercase tracking-wider transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk rounded ${activeChart === tab.key ? "text-ivory border-b-2 border-path-risk" : "text-ivory-faint border-b-2 border-transparent hover:text-ivory-dim"}`}>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-ivory-faint text-[11px] font-mono mb-3 pl-1">{activeTabInfo.description}</p>
+            <div className="bg-surface rounded-lg border border-surface-light p-4 md:p-6">
+              <Suspense fallback={<div className="h-[280px] flex items-center justify-center text-ivory-faint text-sm font-mono">Loading chart&hellip;</div>}>
+                {activeChart === "Radar" && <DecisionRadar metricsA={currentMetrics?.path_a || null} metricsB={currentMetrics?.path_b || null} pathAName={pathAName} pathBName={pathBName} />}
+                {activeChart === "Timeline" && <TimelineChart allMetrics={allMetrics.slice(0, safeRound)} pathAName={pathAName} pathBName={pathBName} />}
+                {activeChart === "Regret" && <RegretChart allMetrics={allMetrics.slice(0, safeRound)} pathAName={pathAName} pathBName={pathBName} />}
+              </Suspense>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Round navigation */}
-        <div className="mt-8"><RoundNav totalRounds={5} currentRound={safeRound} completedRounds={completedRounds} onRoundClick={setCurrentRound} /></div>
-
-        {/* Next / Verdict button */}
-        <div className="mt-8 text-center">
-          {safeRound < transcript.length ? (
-            <button onClick={() => setCurrentRound((p) => p + 1)} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim hover:border-path-risk hover:text-ivory transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk">
-              {nextRoundName ? `Next: ${nextRoundName}` : "Next round"} &rarr;
-            </button>
-          ) : (
-            <button onClick={() => navigate("/verdict", { state: { debate, input } })} className="px-8 py-3 rounded-lg text-sm bg-path-risk text-void font-medium transition-[opacity,box-shadow] duration-200 cursor-pointer hover:shadow-[0_0_20px_rgba(212,168,67,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-risk focus-visible:ring-offset-2 focus-visible:ring-offset-void">See the Verdict</button>
-          )}
-        </div>
+        {visibleMessages >= 2 && (
+          <div className="mt-8"><RoundNav totalRounds={5} currentRound={safeRound} completedRounds={completedRounds} onRoundClick={setCurrentRound} /></div>
+        )}
       </div>
     </div>
   );

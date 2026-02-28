@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { StaggerGroup, StaggerItem } from "../components/Stagger";
+import LifeTimeline from "../components/LifeTimeline";
 import { useDivergeAuth } from "../hooks/useAuth";
 import { useToast } from "../components/Toast";
 import { saveDebate } from "../utils/api";
@@ -24,6 +25,29 @@ function stripMarkdown(text: string): string {
     .replace(RE_MD_LINKS, "$1")
     .replace(RE_INLINE_CODE, "$1")
     .trim();
+}
+
+const TIMELINE_LABELS = ["Year 1", "Year 3", "Year 5", "Year 10", "Deathbed"];
+
+function parseLifeSnapshot(verdictText: string, pathName: string): { label: string; text: string }[] {
+  const marker = `life snapshot - ${pathName}`.toLowerCase();
+  const lower = verdictText.toLowerCase();
+  const idx = lower.indexOf(marker);
+  if (idx === -1) return [];
+
+  const afterMarker = verdictText.slice(idx + marker.length);
+  const nextSectionIdx = afterMarker.search(/\n\s*\*\*[^*]/);
+  const block = nextSectionIdx > 0 ? afterMarker.slice(0, nextSectionIdx) : afterMarker;
+
+  const rows: { label: string; text: string }[] = [];
+  for (const label of TIMELINE_LABELS) {
+    const linePattern = new RegExp(`${label}\\s*:\\s*(.+)`, "i");
+    const match = block.match(linePattern);
+    if (match) {
+      rows.push({ label, text: stripMarkdown(match[1].trim()) });
+    }
+  }
+  return rows;
 }
 
 export default function Verdict() {
@@ -82,7 +106,10 @@ export default function Verdict() {
   const winsA = extractPoints(parseSection(verdictText, ["Where staying wins", `Where ${pathAName} wins`, "Path A wins", "where option a wins"], [`Where ${pathBName}`, "Where jumping", "Path B wins", "where option b wins", ...sectionSeparators])).map(stripMarkdown);
   const winsB = extractPoints(parseSection(verdictText, ["Where jumping wins", `Where ${pathBName} wins`, "Path B wins", "where option b wins"], sectionSeparators)).map(stripMarkdown);
   const blindSpot = stripMarkdown(parseSection(verdictText, ["not seeing", "might not be seeing", "hidden assumption", "blind spot", "thing you're missing"], ["Based on", "lean toward", "question you", "overall"]));
-  const lean = stripMarkdown(parseSection(verdictText, ["lean toward", "probably lean", "you'd lean", "you would lean", "i'd lean", "my lean"], ["question you", "should actually", "reframed", "\n\n**"]));
+  const lean = stripMarkdown(parseSection(verdictText, ["lean toward", "probably lean", "you'd lean", "you would lean", "i'd lean", "my lean", "i'd tell", "what i'd tell"], ["question you", "should actually", "reframed", "\n\n**"]));
+  const snapshotA = parseLifeSnapshot(verdictText, pathAName);
+  const snapshotB = parseLifeSnapshot(verdictText, pathBName);
+  const hasTimeline = snapshotA.length >= 3 || snapshotB.length >= 3;
   const hasStructuredData = winsA.length > 0 || winsB.length > 0 || blindSpot.length > 20;
 
   const handleSave = async () => {
@@ -126,9 +153,16 @@ export default function Verdict() {
             </div>
           </StaggerItem>
 
+          {hasTimeline && (
+            <StaggerItem className="mt-12">
+              <p className="text-ivory-faint text-xs font-mono uppercase tracking-[0.2em] mb-6 text-center">Where each path takes you</p>
+              <LifeTimeline pathAName={pathAName} pathBName={pathBName} snapshotA={snapshotA} snapshotB={snapshotB} />
+            </StaggerItem>
+          )}
+
           {lean && (
             <StaggerItem className="mt-10">
-              <p className="text-ivory-dim text-sm">Based on what you said matters to you, you&rsquo;d probably lean toward</p>
+              <p className="text-ivory-dim text-sm">{input?.user_name ? `Here's what I'd tell ${input.user_name}:` : "Here's what I'd tell a friend in your position:"}</p>
               <p className="font-display text-lg text-path-risk mt-1" style={{ fontWeight: 500 }}>{lean}</p>
             </StaggerItem>
           )}

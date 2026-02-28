@@ -36,6 +36,7 @@ export interface DebateResponse {
 export interface DecisionInput {
   path_a: string;
   path_b: string;
+  user_name: string | null;
   financial_context: string | null;
   values: string | null;
   risk_level?: string;

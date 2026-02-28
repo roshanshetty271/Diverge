@@ -14,6 +14,7 @@ class DecisionInput(BaseModel):
     """User's decision input from the intake form."""
     path_a: str = Field(..., min_length=2, max_length=200, description="Option A")
     path_b: str = Field(..., min_length=2, max_length=200, description="Option B")
+    user_name: Optional[str] = Field(None, max_length=50)
     financial_context: Optional[str] = Field(None, max_length=500)
     values: Optional[str] = Field(None, max_length=200)
     risk_level: str = Field("moderate", pattern="^(conservative|moderate|aggressive)$")

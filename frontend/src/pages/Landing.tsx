@@ -10,12 +10,10 @@ export default function Landing() {
         <StaggerItem>
           <h1 className="font-display text-5xl md:text-6xl text-ivory tracking-[0.25em] uppercase" style={{ fontWeight: 400 }}>Diverge</h1>
         </StaggerItem>
-        <StaggerItem className="mt-8 max-w-md">
-          <p className="text-ivory-dim italic text-lg leading-relaxed">Every decision has two costs.</p>
-          <p className="text-ivory-dim italic text-lg leading-relaxed mt-1">The cost of doing it &mdash; and the cost of not doing it.</p>
-        </StaggerItem>
-        <StaggerItem className="mt-4">
-          <p className="text-ivory-faint text-sm">Watch two versions of your future self argue it out.</p>
+        <StaggerItem className="mt-8">
+          <p className="text-ivory-dim text-lg">You describe your decision.</p>
+          <p className="text-ivory-dim text-lg mt-1">We build two versions of your future self.</p>
+          <p className="text-ivory-dim text-lg mt-1">They debate it for you.</p>
         </StaggerItem>
         <StaggerItem className="mt-12">
           <button onClick={() => navigate("/decide")} className="px-8 py-4 rounded-lg text-ivory text-base bg-transparent border border-path-risk transition-colors duration-300 cursor-pointer hover:shadow-[0_0_20px_rgba(212,168,67,0.12)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-path-risk">

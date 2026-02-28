@@ -1,0 +1,49 @@
+"""Text-to-speech route using Amazon Polly with Neural voices."""
+
+import logging
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger("diverge.routes.tts")
+router = APIRouter(prefix="/api", tags=["tts"])
+
+VALID_VOICES = {
+    "Matthew", "Stephen", "Joanna", "Ruth",
+    "Gregory", "Danielle",
+}
+
+
+class TTSRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
+    voice_id: str = Field("Matthew")
+
+
+@router.post("/tts")
+def synthesize_speech(req: TTSRequest):
+    """Synthesize speech from text using Amazon Polly Neural engine.
+
+    Returns audio/mpeg stream. Frontend plays it directly via Audio element.
+    """
+    if req.voice_id not in VALID_VOICES:
+        req.voice_id = "Matthew"
+
+    try:
+        import boto3
+        from app.config import get_settings
+        settings = get_settings()
+
+        polly = boto3.client("polly", region_name=settings.aws_region)
+        response = polly.synthesize_speech(
+            Text=req.text,
+            OutputFormat="mp3",
+            VoiceId=req.voice_id,
+            Engine="neural",
+        )
+
+        audio_stream = response["AudioStream"].read()
+        return Response(content=audio_stream, media_type="audio/mpeg")
+
+    except Exception as e:
+        logger.error(f"Polly TTS failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail="Speech synthesis unavailable.")

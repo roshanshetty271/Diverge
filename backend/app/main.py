@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.routes.debate import router as debate_router
 from app.routes.general import router as general_router
+from app.routes.tts import router as tts_router
 from app.security.middleware import (
     SecurityHeadersMiddleware,
     RequestTrackingMiddleware,
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     # Register routers
     app.include_router(debate_router)
     app.include_router(general_router)
+    app.include_router(tts_router)
 
     return app
 
