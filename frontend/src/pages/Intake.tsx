@@ -32,6 +32,7 @@ export default function Intake() {
   const { toast } = useToast();
   const [step, setStep] = useState(0);
   const [userName, setUserName] = useState("");
+  const [userAge, setUserAge] = useState("");
   const [pathA, setPathA] = useState(initial.pathA || "");
   const [pathB, setPathB] = useState(initial.pathB || "");
   const [salary, setSalary] = useState("");
@@ -59,6 +60,7 @@ export default function Intake() {
       path_a: sanitizeInput(pathA),
       path_b: sanitizeInput(pathB),
       user_name: userName.trim() || null,
+      age: userAge ? parseInt(userAge, 10) : null,
       financial_context: salary || salaryNew || savings
         ? `Current income: $${sanitizeFinancialInput(salary) || "unknown"}/yr. New path income: $${sanitizeFinancialInput(salaryNew) || "unknown"}/yr. Savings: $${sanitizeFinancialInput(savings) || "unknown"}.`
         : null,
@@ -87,14 +89,24 @@ export default function Intake() {
             <motion.div key="step0" variants={slideVariants} initial="enter" animate="center" exit="exit" transition={{ duration: 0.6 }}>
               <h1 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>What should we call you?</h1>
               <p className="text-ivory-dim text-sm mt-2">Makes the debate feel like it's actually about you.</p>
-              <input
-                type="text" value={userName} onChange={(e) => setUserName(e.target.value.slice(0, 50))}
-                placeholder="First name"
-                aria-label="Your name"
-                autoFocus
-                onKeyDown={(e) => e.key === "Enter" && setStep(1)}
-                className="w-full mt-8 bg-surface border border-surface-light rounded-lg p-4 text-ivory text-base focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
-              />
+              <div className="flex gap-3 mt-8">
+                <input
+                  type="text" value={userName} onChange={(e) => setUserName(e.target.value.slice(0, 50))}
+                  placeholder="First name"
+                  aria-label="Your name"
+                  autoFocus
+                  onKeyDown={(e) => e.key === "Enter" && setStep(1)}
+                  className="flex-1 bg-surface border border-surface-light rounded-lg p-4 text-ivory text-base focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
+                />
+                <input
+                  type="number" value={userAge} onChange={(e) => setUserAge(e.target.value.slice(0, 3))}
+                  placeholder="Age"
+                  aria-label="Your age"
+                  min={13} max={120}
+                  onKeyDown={(e) => e.key === "Enter" && setStep(1)}
+                  className="w-20 bg-surface border border-surface-light rounded-lg p-4 text-ivory text-base text-center focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
+                />
+              </div>
               <div className="flex gap-3 mt-8">
                 <button onClick={() => setStep(1)} className="flex-1 py-3 px-6 rounded-lg text-sm bg-path-risk text-void font-medium cursor-pointer transition-opacity duration-200">
                   {userName.trim() ? `Hey, ${userName.trim()}` : "Continue"} &rarr;

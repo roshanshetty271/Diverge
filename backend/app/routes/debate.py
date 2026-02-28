@@ -8,11 +8,16 @@ Security measures:
 - Error sanitization: no stack traces in responses
 """
 
+import json
+import asyncio
 import logging
+import queue
+import threading
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi.responses import StreamingResponse
 from app.schemas import DecisionInput, DebateResponse
-from app.orchestrator import run_debate
+from app.orchestrator import run_debate, run_debate_streaming
 from app.security.rate_limiter import check_rate_limit
 from app.security.llm_security import sanitize_writing_samples, sanitize_user_input, detect_injection
 from app.security.cognito import get_current_user
@@ -80,3 +85,62 @@ def start_debate(
     except Exception as e:
         logger.error(f"Debate failed for {user_id}: {type(e).__name__}", exc_info=False)
         raise HTTPException(status_code=500, detail="The debate could not be completed. Please try again.")
+
+
+@router.post("/debate/stream")
+async def stream_debate(
+    decision: DecisionInput,
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    """Stream debate rounds via SSE as each round completes."""
+    settings = get_settings()
+    if settings.origin_verify_header and settings.origin_verify_secret:
+        origin_header = request.headers.get(settings.origin_verify_header, "")
+        if origin_header != settings.origin_verify_secret:
+            raise HTTPException(status_code=403, detail="Access denied.")
+
+    if user:
+        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")
+    else:
+        check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate")
+
+    for field_name, field_value in [("path_a", decision.path_a), ("path_b", decision.path_b)]:
+        is_suspicious, pattern = detect_injection(field_value)
+        if is_suspicious:
+            logger.warning(f"Injection detected in {field_name}: '{pattern}'")
+            raise HTTPException(status_code=400, detail="Your input contains patterns that can't be processed.")
+
+    user_context = decision.model_dump()
+    user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
+    user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
+    user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+
+    user_id = user["sub"] if user else "anonymous"
+    logger.info(f"Starting streaming debate: '{decision.path_a}' vs '{decision.path_b}' by {user_id}")
+
+    async def event_generator():
+        q: queue.Queue = queue.Queue()
+
+        def worker():
+            try:
+                for event in run_debate_streaming(user_context):
+                    q.put(event)
+            except Exception as e:
+                q.put({"type": "error", "message": str(e)})
+            q.put(None)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        while True:
+            event = await asyncio.to_thread(q.get)
+            if event is None:
+                break
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

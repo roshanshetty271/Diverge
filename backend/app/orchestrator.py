@@ -303,3 +303,62 @@ def run_debate(user_context: dict) -> DebateResponse:
         completed_rounds=len(completed),
         total_rounds=len(rounds),
     )
+
+
+def run_debate_streaming(user_context: dict):
+    """Generator that yields debate events one round at a time.
+
+    Yields dicts: {"type": "round", "data": {...}} for each round,
+    then {"type": "complete", ...} with verdict and metadata.
+    """
+    debate_id = str(uuid.uuid4())
+    transcript: list[RoundResult] = []
+    all_metrics: list[RoundMetrics | None] = []
+    prev_beta = None
+    debate_summary = ""
+
+    category = detect_decision_category(user_context["path_a"], user_context["path_b"])
+    brave = detect_brave_path(user_context["path_a"], user_context["path_b"])
+    alpha_persona, beta_persona = _assign_personas(brave, user_context)
+    rounds = get_rounds(category)
+    tools = FINANCIAL_TOOLS if category == "financial" else []
+
+    logger.info(
+        f"Starting streaming debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
+        f"(category={category}, brave={brave})"
+    )
+    start_time = time.time()
+
+    for i, round_info in enumerate(rounds):
+        logger.info(f"Streaming debate {debate_id}: round {i + 1}")
+        result = _run_round(round_info, user_context, prev_beta, i, debate_summary, tools, alpha_persona, beta_persona)
+        transcript.append(result)
+        all_metrics.append(result.metrics)
+        prev_beta = result.beta if result.status == "completed" else prev_beta
+
+        if result.status == "completed":
+            debate_summary += f"\n[Round {i + 1}]\n"
+            debate_summary += f"Path A: {result.alpha[:400]}...\n"
+            debate_summary += f"Path B: {result.beta[:400]}...\n"
+
+        yield {"type": "round", "data": result.model_dump()}
+
+    completed = [r for r in transcript if r.status == "completed"]
+    if len(completed) >= 3:
+        verdict = _generate_verdict(transcript, user_context)
+    elif len(completed) >= 1:
+        verdict = f"Only {len(completed)} of 5 rounds completed. Partial analysis."
+    else:
+        verdict = "The debate could not be completed."
+
+    elapsed = time.time() - start_time
+    logger.info(f"Streaming debate {debate_id} finished in {elapsed:.1f}s")
+
+    yield {
+        "type": "complete",
+        "verdict": verdict,
+        "debate_id": debate_id,
+        "metrics": [m.model_dump() if m else None for m in all_metrics],
+        "completed_rounds": len(completed),
+        "total_rounds": len(rounds),
+    }

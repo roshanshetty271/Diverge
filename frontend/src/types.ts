@@ -37,6 +37,7 @@ export interface DecisionInput {
   path_a: string;
   path_b: string;
   user_name: string | null;
+  age?: number | null;
   financial_context: string | null;
   values: string | null;
   risk_level?: string;

@@ -4,9 +4,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import AgentMessage from "../components/AgentMessage";
 import RoundNav from "../components/RoundNav";
 import { ROUNDS } from "../utils/constants";
-import { loadDebateState } from "../utils/debateStorage";
+import { loadDebateState, storeDebateState } from "../utils/debateStorage";
+import { subscribeDebate, getDebateStream } from "../utils/debateStream";
 import { getVoicePair, stopSpeaking } from "../utils/tts";
-import type { DebateResponse, DecisionInput } from "../types";
+import type { DebateResponse, DecisionInput, RoundResult, RoundMetrics } from "../types";
 
 const DecisionRadar = lazy(() => import("../components/DecisionRadar"));
 const TimelineChart = lazy(() => import("../components/TimelineChart"));
@@ -23,17 +24,42 @@ export default function Debate() {
   const location = useLocation();
   const navigate = useNavigate();
   const locationState = (location.state || {}) as { debate?: DebateResponse; input?: DecisionInput };
-  const stored = !locationState.debate ? loadDebateState() : null;
-  const debate = locationState.debate || stored?.debate;
-  const input = locationState.input || stored?.input;
 
+  const stream = getDebateStream();
+  const stored = !locationState.debate && stream.rounds.length === 0 ? loadDebateState() : null;
+
+  const isStreaming = stream.rounds.length > 0;
+
+  const [, forceUpdate] = useState(0);
   const [currentRound, setCurrentRound] = useState(1);
   const [activeChart, setActiveChart] = useState<ChartTab>("Radar");
   const [visibleMessages, setVisibleMessages] = useState(0);
   const [skipped, setSkipped] = useState(false);
 
+  const transcript: RoundResult[] = isStreaming ? stream.rounds : (locationState.debate?.transcript || stored?.debate?.transcript || []);
+  const input: DecisionInput | undefined | null = isStreaming ? stream.input : (locationState.input || stored?.input);
+  const allMetrics: (RoundMetrics | null)[] = isStreaming ? stream.metrics : (locationState.debate?.metrics || stored?.debate?.metrics || []);
+  const verdictReady = isStreaming ? stream.done && !!stream.verdict : true;
+  const debate: DebateResponse | undefined = isStreaming
+    ? { debate_id: stream.debateId || "", transcript: stream.rounds, verdict: stream.verdict || "", metrics: stream.metrics, completed_rounds: stream.completedRounds, total_rounds: stream.totalRounds }
+    : (locationState.debate || stored?.debate);
+
   const userName = input?.user_name || null;
   const [voiceA, voiceB] = getVoicePair(userName);
+
+  useEffect(() => {
+    const unsub = subscribeDebate(() => {
+      forceUpdate((c) => c + 1);
+      const s = getDebateStream();
+      if (s.done && s.input && s.rounds.length > 0) {
+        storeDebateState(
+          { debate_id: s.debateId || "", transcript: s.rounds, verdict: s.verdict || "", metrics: s.metrics, completed_rounds: s.completedRounds, total_rounds: s.totalRounds },
+          s.input,
+        );
+      }
+    });
+    return unsub;
+  }, []);
 
   const revealAll = useCallback(() => {
     setVisibleMessages(2);
@@ -44,10 +70,8 @@ export default function Debate() {
     setVisibleMessages(0);
     setSkipped(false);
     stopSpeaking();
-
     const t1 = setTimeout(() => setVisibleMessages(1), 500);
     const t2 = setTimeout(() => setVisibleMessages(2), 2500);
-
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [currentRound]);
 
@@ -55,7 +79,7 @@ export default function Debate() {
     return () => stopSpeaking();
   }, []);
 
-  if (!debate || !debate.transcript) {
+  if (transcript.length === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p className="text-ivory-dim">The timeline has diverged. <button onClick={() => navigate("/decide")} className="text-path-risk underline cursor-pointer">Start over</button></p>
@@ -63,8 +87,6 @@ export default function Debate() {
     );
   }
 
-  const transcript = debate.transcript;
-  const allMetrics = debate.metrics || [];
   const safeRound = Math.max(1, Math.min(currentRound, transcript.length));
   const round = transcript[safeRound - 1];
   const roundName = round?.round_name || ROUNDS[safeRound - 1]?.name || `Round ${safeRound}`;
@@ -81,6 +103,10 @@ export default function Debate() {
   const activeTabInfo = CHART_TABS.find((t) => t.key === activeChart)!;
 
   const heading = userName ? `${userName}\u2019s Decision` : "The Debate";
+
+  const isLastAvailableRound = safeRound === transcript.length;
+  const moreRoundsGenerating = isStreaming && !stream.done && isLastAvailableRound;
+  const canGoVerdict = safeRound >= transcript.length && verdictReady;
 
   return (
     <div className="min-h-screen bg-void px-4 py-8 md:px-8">
@@ -113,11 +139,19 @@ export default function Debate() {
               </div>
             );
           })}
+          {isStreaming && !stream.done && (
+            <div className="flex items-center gap-1">
+              <span className="w-4 md:w-6 h-px bg-surface-light" />
+              <span className="text-[10px] font-mono text-ivory-faint/40 animate-pulse">
+                {transcript.length + 1 <= 5 ? `R${transcript.length + 1}…` : "…"}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Round header */}
         <div className="text-center mb-8">
-          <p className="text-ivory-faint text-xs font-mono uppercase tracking-widest">Round {safeRound} of {transcript.length}</p>
+          <p className="text-ivory-faint text-xs font-mono uppercase tracking-widest">Round {safeRound} of {stream.totalRounds || 5}</p>
           <h1 className="font-display text-2xl md:text-3xl text-ivory mt-1" style={{ fontWeight: 400 }}>{roundName}</h1>
           <p className="text-ivory-dim text-sm mt-1">{roundTitle}</p>
           {round?.status === "partial" && <p className="text-path-risk text-xs mt-2 font-mono">This round was only partially generated</p>}
@@ -144,20 +178,24 @@ export default function Debate() {
           </div>
         )}
 
-        {/* Next / Verdict button — immediately after messages */}
+        {/* Next / Generating / Verdict button */}
         {visibleMessages >= 2 && (
           <div className="mt-8 text-center">
-            {safeRound < transcript.length ? (
+            {moreRoundsGenerating ? (
+              <p className="text-ivory-faint text-xs font-mono animate-pulse">Generating next round&hellip;</p>
+            ) : canGoVerdict ? (
+              <button onClick={() => navigate("/verdict", { state: { debate, input } })} className="px-8 py-3 rounded-lg text-sm bg-path-risk text-void font-medium transition-[opacity,box-shadow] duration-200 cursor-pointer hover:shadow-[0_0_20px_rgba(212,168,67,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-risk focus-visible:ring-offset-2 focus-visible:ring-offset-void">See the Verdict</button>
+            ) : safeRound < transcript.length ? (
               <button onClick={() => setCurrentRound((p) => p + 1)} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim hover:border-path-risk hover:text-ivory transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk">
                 {nextRoundName ? `Next: ${nextRoundName}` : "Next round"} &rarr;
               </button>
-            ) : (
-              <button onClick={() => navigate("/verdict", { state: { debate, input } })} className="px-8 py-3 rounded-lg text-sm bg-path-risk text-void font-medium transition-[opacity,box-shadow] duration-200 cursor-pointer hover:shadow-[0_0_20px_rgba(212,168,67,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-risk focus-visible:ring-offset-2 focus-visible:ring-offset-void">See the Verdict</button>
-            )}
+            ) : !verdictReady ? (
+              <p className="text-ivory-faint text-xs font-mono animate-pulse">Generating verdict&hellip;</p>
+            ) : null}
           </div>
         )}
 
-        {/* Charts — below nav button for optional exploration */}
+        {/* Charts */}
         {visibleMessages >= 2 && (
           <div className="mt-10">
             <div className="flex gap-1 mb-2">
@@ -181,7 +219,7 @@ export default function Debate() {
 
         {/* Round navigation */}
         {visibleMessages >= 2 && (
-          <div className="mt-8"><RoundNav totalRounds={5} currentRound={safeRound} completedRounds={completedRounds} onRoundClick={setCurrentRound} /></div>
+          <div className="mt-8"><RoundNav totalRounds={transcript.length} currentRound={safeRound} completedRounds={completedRounds} onRoundClick={setCurrentRound} /></div>
         )}
       </div>
     </div>
