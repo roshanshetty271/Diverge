@@ -58,6 +58,16 @@ export async function startDebateStream(payload: DecisionInput): Promise<void> {
       throw new Error(typeof errData.detail === "string" ? errData.detail : `Server error ${res.status}`);
     }
 
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const jsonBody = await res.json();
+      if (jsonBody.type === "crisis") {
+        state = { ...state, error: "__crisis__", done: true };
+        notify();
+        return;
+      }
+    }
+
     if (!res.body) throw new Error("No response stream");
 
     const reader = res.body.getReader();

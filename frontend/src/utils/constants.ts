@@ -36,6 +36,13 @@ export const VALUES: string[] = [
   "Adventure", "Impact", "Stability", "Creativity",
 ];
 
+export const CRISIS_RESOURCES = [
+  { name: "988 Suicide & Crisis Lifeline", action: "Call or text 988", url: "https://988lifeline.org", available: "24/7, free, confidential" },
+  { name: "Crisis Text Line", action: "Text HOME to 741741", url: "https://crisistextline.org", available: "24/7, free" },
+  { name: "Emergency Services", action: "Call 911", url: null as string | null, available: "Immediate danger" },
+  { name: "International Crisis Lines", action: "Find your country", url: "https://findahelpline.com", available: "Worldwide" },
+];
+
 // In dev, Vite proxy handles /api/* → localhost:8000 (see vite.config.ts)
 // In prod, VITE_API_URL points to CloudFront or API Gateway
 export const API_BASE: string = import.meta.env.VITE_API_URL || "";

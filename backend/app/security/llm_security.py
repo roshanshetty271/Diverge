@@ -190,6 +190,38 @@ def validate_agent_output(output: str) -> str:
     return cleaned
 
 
+# ── Output safety patterns ──────────────────────────────────────────
+# Agents can describe consequences honestly but cannot prescribe, diagnose, or encourage harm.
+
+_UNSAFE_OUTPUT_PATTERNS = [
+    (re.compile(r"\byou\s+should\s+(just\s+)?(end\s+it|kill\s+yourself|die)\b", re.IGNORECASE), "[This content was removed for safety.]"),
+    (re.compile(r"\b(cut|hurt|harm)\s+yourself\b", re.IGNORECASE), "[This content was removed for safety.]"),
+    (re.compile(r"\byou\s+have\s+(depression|bipolar|anxiety\s+disorder|PTSD|BPD|schizophrenia)\b", re.IGNORECASE), "you may be experiencing emotional difficulty"),
+    (re.compile(r"\byou\s+should\s+(take|start|stop)\s+(medication|antidepressants|SSRIs|pills)\b", re.IGNORECASE), "consider speaking with a professional about treatment options"),
+    (re.compile(r"\byou\s+should\s+sue\b", re.IGNORECASE), "you might want to consult a legal professional"),
+    (re.compile(r"\b(here'?s\s+how\s+to|step[s]?\s+to)\s+(hang|cut|overdose|poison)\b", re.IGNORECASE), "[This content was removed for safety.]"),
+]
+
+
+def validate_safe_content(output: str) -> str:
+    """Post-process agent output to strip or replace unsafe content.
+
+    Agents can discuss emotional difficulty, financial hardship, and regret.
+    They CANNOT prescribe, diagnose, or encourage harm.
+    """
+    if not output:
+        return ""
+
+    cleaned = output
+    for pattern, replacement in _UNSAFE_OUTPUT_PATTERNS:
+        match = pattern.search(cleaned)
+        if match:
+            logger.warning(f"Unsafe content pattern detected in output: '{match.group()}'")
+            cleaned = pattern.sub(replacement, cleaned)
+
+    return cleaned
+
+
 def wrap_user_content(content: str, label: str = "user_input") -> str:
     """Wrap user content in XML delimiters for structural isolation.
 

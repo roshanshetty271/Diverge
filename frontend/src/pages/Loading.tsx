@@ -30,6 +30,11 @@ export default function Loading() {
       setRoundCount(s.rounds.length);
 
       if (s.error && !hasNavigated.current) {
+        if (s.error === "__crisis__") {
+          hasNavigated.current = true;
+          navigate("/crisis", { replace: true });
+          return;
+        }
         setError(s.error);
         return;
       }

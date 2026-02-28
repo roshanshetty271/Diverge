@@ -15,6 +15,9 @@ export default function Navbar() {
             Journal
           </Link>
         )}
+        <Link to="/crisis" className="text-ivory-faint/60 text-[11px] hover:text-ivory-faint transition-colors">
+          Need help?
+        </Link>
       </div>
     </nav>
   );

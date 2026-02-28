@@ -3,6 +3,7 @@ import { Routes, Route, useLocation } from "react-router-dom";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import RequireAuth from "@/components/RequireAuth";
 import Navbar from "@/components/Navbar";
+import SafetyFooter from "@/components/SafetyFooter";
 import { isCognitoConfigured } from "@/utils/auth";
 
 // Lazy-loaded pages — each becomes a separate chunk (Vite best practice)
@@ -15,6 +16,7 @@ const Debate = lazy(() => import("@/pages/Debate"));
 const Verdict = lazy(() => import("@/pages/Verdict"));
 const Journal = lazy(() => import("@/pages/Journal"));
 const ErrorPage = lazy(() => import("@/pages/ErrorPage"));
+const CrisisResources = lazy(() => import("@/components/CrisisResources"));
 
 // Minimal fallback that matches the void theme (not a white flash)
 function PageFallback() {
@@ -25,7 +27,7 @@ function PageFallback() {
   );
 }
 
-const HIDE_NAVBAR_PATHS = ["/", "/loading"];
+const HIDE_NAVBAR_PATHS = ["/", "/loading", "/crisis"];
 
 export default function App() {
   const location = useLocation();
@@ -51,9 +53,11 @@ export default function App() {
             <Route path="/debate" element={<Debate />} />
             <Route path="/verdict" element={<Verdict />} />
             <Route path="/journal" element={<RequireAuth fallbackMessage="Sign in to view your Decision Journal."><Journal /></RequireAuth>} />
+            <Route path="/crisis" element={<CrisisResources />} />
             <Route path="*" element={<ErrorPage />} />
           </Routes>
         </Suspense>
+        {location.pathname !== "/" && <SafetyFooter />}
       </div>
     </ErrorBoundary>
   );

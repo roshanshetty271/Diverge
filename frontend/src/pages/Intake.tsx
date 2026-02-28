@@ -185,7 +185,11 @@ export default function Intake() {
                 <p className="text-ivory-dim text-sm mt-1">Paste a few texts or emails that sound like you. This makes the debate personal.</p>
                 <div className="mt-4"><WritingSampleInput value={writingSample} onChange={setWritingSample} /></div>
               </div>
-              <button onClick={startDebate} className="w-full mt-10 py-4 rounded-lg text-base bg-path-risk text-void font-medium tracking-wide cursor-pointer transition-colors duration-200 hover:shadow-[0_0_24px_rgba(212,168,67,0.15)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-path-risk">
+              <p className="text-ivory-faint text-[11px] mt-10 text-center leading-relaxed">
+                Diverge is a decision exploration tool, not therapy or medical advice.<br />
+                If you&rsquo;re in crisis, call <a href="tel:988" className="underline underline-offset-2">988</a> or text HOME to 741741.
+              </p>
+              <button onClick={startDebate} className="w-full mt-4 py-4 rounded-lg text-base bg-path-risk text-void font-medium tracking-wide cursor-pointer transition-colors duration-200 hover:shadow-[0_0_24px_rgba(212,168,67,0.15)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-path-risk">
                 Start the debate &rarr;
               </button>
             </motion.div>

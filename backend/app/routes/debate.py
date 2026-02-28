@@ -15,11 +15,12 @@ import queue
 import threading
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from app.schemas import DecisionInput, DebateResponse
 from app.orchestrator import run_debate, run_debate_streaming
 from app.security.rate_limiter import check_rate_limit
 from app.security.llm_security import sanitize_writing_samples, sanitize_user_input, detect_injection
+from app.security.safety import detect_crisis, detect_blocked_topic, CRISIS_RESOURCES
 from app.security.cognito import get_current_user
 from app.config import get_settings
 
@@ -50,12 +51,21 @@ def start_debate(
             logger.warning(f"Origin verification failed from {request.client.host if request.client else 'unknown'}")
             raise HTTPException(status_code=403, detail="Access denied.")
 
+    # 0b. Content safety — runs BEFORE rate limiting so blocked requests don't count
+    all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
+    is_crisis, crisis_cat = detect_crisis(all_text)
+    if is_crisis:
+        logger.warning(f"Crisis signal detected (category={crisis_cat}) from {request.client.host if request.client else 'unknown'}")
+        return JSONResponse({"type": "crisis", "category": crisis_cat, "resources": CRISIS_RESOURCES})
+
+    is_blocked, block_reason = detect_blocked_topic(decision.path_a, decision.path_b, decision.constraints or "")
+    if is_blocked:
+        raise HTTPException(status_code=400, detail=block_reason)
+
     # 1. Rate limiting — tighter for anonymous, generous for authenticated
     if user:
-        # Authenticated: rate limit by user sub (can't bypass with VPN)
         check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")
     else:
-        # Anonymous: rate limit by IP+fingerprint (enhanced tracking)
         check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate")
 
     # 2. Check decision paths for injection
@@ -99,6 +109,17 @@ async def stream_debate(
         origin_header = request.headers.get(settings.origin_verify_header, "")
         if origin_header != settings.origin_verify_secret:
             raise HTTPException(status_code=403, detail="Access denied.")
+
+    # Content safety — before rate limiting
+    all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
+    is_crisis, crisis_cat = detect_crisis(all_text)
+    if is_crisis:
+        logger.warning(f"Crisis signal detected in stream (category={crisis_cat})")
+        return JSONResponse({"type": "crisis", "category": crisis_cat, "resources": CRISIS_RESOURCES})
+
+    is_blocked, block_reason = detect_blocked_topic(decision.path_a, decision.path_b, decision.constraints or "")
+    if is_blocked:
+        raise HTTPException(status_code=400, detail=block_reason)
 
     if user:
         check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")

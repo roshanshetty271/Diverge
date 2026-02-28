@@ -26,7 +26,7 @@ from app.agents.metrics import extract_metrics
 from app.schemas import RoundResult, RoundMetrics, DebateResponse
 from app.tools.monte_carlo import monte_carlo_financial
 from app.tools.data_tools import get_salary_data, compare_cost_of_living, calculate_runway
-from app.security.llm_security import validate_agent_output
+from app.security.llm_security import validate_agent_output, validate_safe_content
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def _run_round(
                     f"Fight back. What's YOUR reality at {timeline}?"
                 )
             raw_alpha = alpha_agent(alpha_input)
-            alpha_response = validate_agent_output(_safe_agent_output(raw_alpha))
+            alpha_response = validate_safe_content(validate_agent_output(_safe_agent_output(raw_alpha)))
 
             if not alpha_response:
                 raise ValueError("Alpha agent returned empty response")
@@ -169,7 +169,7 @@ def _run_round(
                 f"\"{alpha_response}\"\n\n"
                 f"Fight back. What's YOUR reality at {timeline}?"
             )
-            beta_response = validate_agent_output(_safe_agent_output(raw_beta))
+            beta_response = validate_safe_content(validate_agent_output(_safe_agent_output(raw_beta)))
 
             if not beta_response:
                 raise ValueError("Beta agent returned empty response")
@@ -231,7 +231,7 @@ def _generate_verdict(transcript: list[RoundResult], user_ctx: dict) -> str:
                 system_prompt=prompt,
             )
             raw = verdict_agent("Give your verdict now.")
-            result = validate_agent_output(_safe_agent_output(raw))
+            result = validate_safe_content(validate_agent_output(_safe_agent_output(raw)))
             if result:
                 return result
         except Exception as e:
