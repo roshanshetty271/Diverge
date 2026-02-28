@@ -8,9 +8,10 @@ interface Props {
   message: string;
   variant?: "safe" | "risk";
   voiceId?: string;
+  streaming?: boolean;
 }
 
-export default function AgentMessage({ agentName, message, variant = "safe", voiceId }: Props) {
+export default function AgentMessage({ agentName, message, variant = "safe", voiceId, streaming }: Props) {
   const isSafe = variant === "safe";
   const borderColor = isSafe ? "border-l-path-safe" : "border-r-path-risk";
   const accentText = isSafe ? "text-path-safe" : "text-path-risk";
@@ -23,12 +24,12 @@ export default function AgentMessage({ agentName, message, variant = "safe", voi
       stopSpeaking();
       return;
     }
-    if (!voiceId) return;
+    if (!voiceId || streaming) return;
     speak(message, voiceId, {
       onStart: () => setSpeaking(true),
       onEnd: () => setSpeaking(false),
     });
-  }, [speaking, message, voiceId]);
+  }, [speaking, message, voiceId, streaming]);
 
   const paragraphs = message.split("\n\n").filter(Boolean);
 
@@ -41,13 +42,13 @@ export default function AgentMessage({ agentName, message, variant = "safe", voi
     >
       <div className={`max-w-[85%] md:max-w-[75%] flex ${isSafe ? "flex-row" : "flex-row-reverse"} gap-3 items-start`}>
         <div className="shrink-0 mt-1">
-          <AgentAvatar variant={variant} speaking={speaking} />
+          <AgentAvatar variant={variant} speaking={speaking || !!streaming} />
         </div>
 
         <div>
           <div className={`flex items-center gap-2 mb-1.5 ${isSafe ? "" : "justify-end"}`}>
             <span className={`${accentText} text-xs font-medium font-body`}>{agentName}</span>
-            {voiceId && (
+            {voiceId && !streaming && (
               <button
                 onClick={handleSpeak}
                 className={`${accentText} opacity-60 hover:opacity-100 transition-opacity cursor-pointer`}
@@ -66,9 +67,18 @@ export default function AgentMessage({ agentName, message, variant = "safe", voi
 
           <div className={`bg-surface rounded-lg p-4 border-l-2 border-r-0 ${isSafe ? borderColor : "border-l-0 border-r-2 border-r-path-risk"}`}>
             <div className="text-ivory text-sm leading-[1.75] space-y-3">
-              {paragraphs.map((paragraph, i) => (
-                <p key={i}>{paragraph}</p>
-              ))}
+              {paragraphs.length > 0 ? (
+                paragraphs.map((paragraph, i) => (
+                  <p key={i}>
+                    {paragraph}
+                    {streaming && i === paragraphs.length - 1 && (
+                      <span className="inline-block w-[2px] h-[1em] bg-current ml-0.5 align-text-bottom animate-pulse" />
+                    )}
+                  </p>
+                ))
+              ) : streaming ? (
+                <p><span className="inline-block w-[2px] h-[1em] bg-current align-text-bottom animate-pulse" /></p>
+              ) : null}
             </div>
           </div>
         </div>

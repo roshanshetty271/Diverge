@@ -8,12 +8,16 @@ Edge cases handled:
 - Verdict output validated for prompt leakage
 
 Supports both OpenAI and Bedrock via DIVERGE_MODEL_PROVIDER setting.
+Token-level streaming supported via QueueCallbackHandler.
 """
 
 import uuid
 import time
 import random
 import logging
+import queue
+import threading
+from typing import Any
 from strands import Agent
 
 from app.config import get_settings
@@ -28,6 +32,7 @@ from app.tools.monte_carlo import monte_carlo_financial
 from app.tools.data_tools import get_salary_data, compare_cost_of_living, calculate_runway
 from app.tools.knowledge import research_insight
 from app.security.llm_security import validate_agent_output, validate_safe_content
+from app.tools.comprehend import analyze_round_sentiment
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,41 @@ TOOL_MAP: dict[str, list] = {
 }
 
 NON_RETRYABLE = ("ValidationException", "AccessDeniedException", "ResourceNotFoundException")
+
+# In-memory interjection store: debate_id → list of interjection texts (one per round gap)
+_interjection_store: dict[str, list[str]] = {}
+
+
+def set_interjection(debate_id: str, text: str):
+    """Store a user interjection to be picked up by the next round."""
+    _interjection_store.setdefault(debate_id, []).append(text)
+
+
+def _pop_interjection(debate_id: str) -> str | None:
+    """Pop and return the next interjection for a debate, if any."""
+    interjections = _interjection_store.get(debate_id, [])
+    if interjections:
+        return interjections.pop(0)
+    return None
+
+
+class QueueCallbackHandler:
+    """Callback handler that pushes tokens into a thread-safe queue for SSE streaming."""
+
+    def __init__(self, token_queue: queue.Queue, agent_label: str, round_num: int):
+        self.q = token_queue
+        self.agent_label = agent_label
+        self.round_num = round_num
+
+    def __call__(self, **kwargs: Any) -> None:
+        data = kwargs.get("data", "")
+        if data:
+            self.q.put({
+                "type": "token",
+                "agent": self.agent_label,
+                "round": self.round_num,
+                "text": data,
+            })
 
 
 def _make_model(max_tokens: int | None = None, temperature: float | None = None):
@@ -68,13 +108,19 @@ def _make_model(max_tokens: int | None = None, temperature: float | None = None)
             read_timeout=120,
             connect_timeout=10,
         )
-        return BedrockModel(
-            model_id=s.debate_model_id,
-            region_name=s.aws_region,
-            max_tokens=tokens,
-            temperature=temp,
-            boto_client_config=boto_config,
-        )
+        kwargs: dict = {
+            "model_id": s.debate_model_id,
+            "region_name": s.aws_region,
+            "max_tokens": tokens,
+            "temperature": temp,
+            "boto_client_config": boto_config,
+        }
+        if s.guardrail_id:
+            kwargs["guardrail_config"] = {
+                "guardrailIdentifier": s.guardrail_id,
+                "guardrailVersion": s.guardrail_version,
+            }
+        return BedrockModel(**kwargs)
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -187,6 +233,7 @@ def _run_round(
 
             debate_text = f"Path A argued:\n{alpha_response}\n\nPath B argued:\n{beta_response}"
             metrics = extract_metrics(debate_text)
+            sentiment = analyze_round_sentiment(alpha_response, beta_response)
 
             return RoundResult(
                 round_number=round_num + 1,
@@ -195,6 +242,7 @@ def _run_round(
                 alpha=alpha_response,
                 beta=beta_response,
                 metrics=metrics,
+                sentiment=sentiment,
                 status="completed",
             )
 
@@ -381,6 +429,309 @@ def run_debate_streaming(user_context: dict):
 
     elapsed = time.time() - start_time
     logger.info(f"Streaming debate {debate_id} finished in {elapsed:.1f}s")
+
+    resources = _get_resources(category)
+
+    yield {
+        "type": "complete",
+        "verdict": verdict,
+        "debate_id": debate_id,
+        "metrics": [m.model_dump() if m else None for m in all_metrics],
+        "completed_rounds": len(completed),
+        "total_rounds": len(rounds),
+        "resources": [r.model_dump() for r in resources],
+    }
+
+
+def _run_agent_with_streaming(
+    system_prompt: str,
+    user_input: str,
+    tools: list,
+    token_queue: queue.Queue,
+    agent_label: str,
+    round_num: int,
+) -> str:
+    """Run an agent with a streaming callback, returning the full response text."""
+    handler = QueueCallbackHandler(token_queue, agent_label, round_num)
+    agent = Agent(
+        model=_make_model(),
+        system_prompt=system_prompt,
+        tools=tools,
+        callback_handler=handler,
+    )
+    raw = agent(user_input)
+    return _safe_agent_output(raw)
+
+
+def run_debate_token_streaming(user_context: dict):
+    """Generator yielding token-level events for real-time UI streaming.
+
+    Event types:
+      {"type": "round_start", "round": N, "round_name": str, "round_title": str}
+      {"type": "token", "agent": "alpha"|"beta", "round": N, "text": str}
+      {"type": "agent_done", "agent": "alpha"|"beta", "round": N}
+      {"type": "round_complete", "round": N, "data": {...}, "metrics": {...}}
+      {"type": "verdict_start"}
+      {"type": "verdict_token", "text": str}
+      {"type": "complete", "verdict": str, ...}
+    """
+    debate_id = str(uuid.uuid4())
+    transcript: list[RoundResult] = []
+    all_metrics: list[RoundMetrics | None] = []
+    prev_beta = None
+    debate_summary = ""
+
+    category = detect_decision_category(user_context["path_a"], user_context["path_b"])
+    user_context["_category"] = category
+    brave = detect_brave_path(user_context["path_a"], user_context["path_b"])
+    alpha_persona, beta_persona = _assign_personas(brave, user_context)
+    rounds = get_rounds(category)
+    tools = TOOL_MAP.get(category, [research_insight])
+
+    logger.info(
+        f"Starting token-streaming debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
+        f"(category={category}, brave={brave})"
+    )
+    start_time = time.time()
+
+    yield {
+        "type": "debate_start",
+        "debate_id": debate_id,
+        "total_rounds": len(rounds),
+    }
+
+    for i, round_info in enumerate(rounds):
+        logger.info(f"Token-streaming debate {debate_id}: round {i + 1}")
+
+        # Check for user interjection from previous round
+        interjection = _pop_interjection(debate_id) if i > 0 else None
+        if interjection:
+            debate_summary += f"\n[User interjects]: {interjection}\n"
+            yield {
+                "type": "interjection",
+                "round": i + 1,
+                "text": interjection,
+            }
+
+        yield {
+            "type": "round_start",
+            "round": i + 1,
+            "round_name": round_info["name"],
+            "round_title": round_info["title"],
+        }
+
+        summary_prefix = f"DEBATE SO FAR:\n{debate_summary}\n\n" if debate_summary else ""
+        path_a = user_context["path_a"]
+        path_b = user_context["path_b"]
+        timeline = round_info.get("timeline", f"round {i + 1}")
+
+        # --- Alpha agent (streams tokens via queue) ---
+        token_q: queue.Queue = queue.Queue()
+        alpha_response = ""
+        beta_response = ""
+
+        if i == 0:
+            alpha_input = (
+                f"{summary_prefix}"
+                f'You chose "{path_a}". It\'s {timeline}. '
+                f"Give your opening statement — what happened?"
+            )
+        else:
+            alpha_input = (
+                f"{summary_prefix}"
+                f'You chose "{path_a}". It\'s now {timeline}.\n\n'
+                f'The version of you who chose "{path_b}" just said:\n\n'
+                f'"{prev_beta}"\n\n'
+                f"Fight back. What's YOUR reality at {timeline}?"
+            )
+
+        try:
+            # Run alpha in a thread so we can drain tokens from the queue
+            alpha_result_holder: list[str] = []
+            alpha_error_holder: list[Exception] = []
+
+            def run_alpha():
+                try:
+                    text = _run_agent_with_streaming(
+                        build_alpha_prompt(user_context, round_info, alpha_persona),
+                        alpha_input, tools, token_q, "alpha", i + 1,
+                    )
+                    alpha_result_holder.append(text)
+                except Exception as e:
+                    alpha_error_holder.append(e)
+                finally:
+                    token_q.put({"type": "_done"})
+
+            thread = threading.Thread(target=run_alpha, daemon=True)
+            thread.start()
+
+            while True:
+                try:
+                    event = token_q.get(timeout=180)
+                except queue.Empty:
+                    break
+                if event.get("type") == "_done":
+                    break
+                yield event
+
+            thread.join(timeout=5)
+
+            if alpha_error_holder:
+                raise alpha_error_holder[0]
+            alpha_response = validate_safe_content(
+                validate_agent_output(alpha_result_holder[0] if alpha_result_holder else "")
+            )
+            if not alpha_response:
+                raise ValueError("Alpha agent returned empty response")
+
+            yield {"type": "agent_done", "agent": "alpha", "round": i + 1}
+
+            # --- Beta agent (streams tokens via queue) ---
+            beta_q: queue.Queue = queue.Queue()
+            beta_input = (
+                f"{summary_prefix}"
+                f'You chose "{path_b}". It\'s now {timeline}.\n\n'
+                f'The version of you who chose "{path_a}" just said:\n\n'
+                f'"{alpha_response}"\n\n'
+                f"Fight back. What's YOUR reality at {timeline}?"
+            )
+
+            beta_result_holder: list[str] = []
+            beta_error_holder: list[Exception] = []
+
+            def run_beta():
+                try:
+                    text = _run_agent_with_streaming(
+                        build_beta_prompt(user_context, round_info, beta_persona),
+                        beta_input, tools, beta_q, "beta", i + 1,
+                    )
+                    beta_result_holder.append(text)
+                except Exception as e:
+                    beta_error_holder.append(e)
+                finally:
+                    beta_q.put({"type": "_done"})
+
+            beta_thread = threading.Thread(target=run_beta, daemon=True)
+            beta_thread.start()
+
+            while True:
+                try:
+                    event = beta_q.get(timeout=180)
+                except queue.Empty:
+                    break
+                if event.get("type") == "_done":
+                    break
+                yield event
+
+            beta_thread.join(timeout=5)
+
+            if beta_error_holder:
+                raise beta_error_holder[0]
+            beta_response = validate_safe_content(
+                validate_agent_output(beta_result_holder[0] if beta_result_holder else "")
+            )
+            if not beta_response:
+                raise ValueError("Beta agent returned empty response")
+
+            yield {"type": "agent_done", "agent": "beta", "round": i + 1}
+
+            debate_text = f"Path A argued:\n{alpha_response}\n\nPath B argued:\n{beta_response}"
+            metrics = extract_metrics(debate_text)
+            sentiment = analyze_round_sentiment(alpha_response, beta_response)
+
+            result = RoundResult(
+                round_number=i + 1,
+                round_name=round_info["name"],
+                round_title=round_info["title"],
+                alpha=alpha_response,
+                beta=beta_response,
+                metrics=metrics,
+                sentiment=sentiment,
+                status="completed",
+            )
+
+        except Exception as e:
+            logger.warning(f"Token-streaming round {i + 1} failed: {type(e).__name__}: {e}")
+            result = RoundResult(
+                round_number=i + 1,
+                round_name=round_info["name"],
+                round_title=round_info["title"],
+                alpha=alpha_response or "This perspective could not be generated.",
+                beta=beta_response or "This perspective could not be generated.",
+                metrics=None,
+                status="partial",
+            )
+
+        transcript.append(result)
+        all_metrics.append(result.metrics)
+        prev_beta = result.beta if result.status == "completed" else prev_beta
+
+        if result.status == "completed":
+            debate_summary += f"\n[Round {i + 1} - {round_info['name']}]\n"
+            debate_summary += f"Path A argued: {result.alpha[:400]}...\n"
+            debate_summary += f"Path B argued: {result.beta[:400]}...\n"
+
+        yield {
+            "type": "round_complete",
+            "round": i + 1,
+            "data": result.model_dump(),
+        }
+
+    # --- Verdict with streaming ---
+    completed = [r for r in transcript if r.status == "completed"]
+    if len(completed) >= 3:
+        yield {"type": "verdict_start"}
+        verdict_q: queue.Queue = queue.Queue()
+
+        verdict_text_holder: list[str] = []
+
+        def run_verdict():
+            try:
+                full_text = ""
+                for r in transcript:
+                    if r.status == "completed":
+                        full_text += f"\n--- Round {r.round_number}: {r.round_title} ---\n"
+                        full_text += f"Path A ({user_context['path_a']}): {r.alpha}\n"
+                        full_text += f"Path B ({user_context['path_b']}): {r.beta}\n"
+
+                prompt = build_verdict_prompt(user_context, full_text)
+                handler = QueueCallbackHandler(verdict_q, "verdict", 0)
+                verdict_agent = Agent(
+                    model=_make_model(max_tokens=2048, temperature=0.6),
+                    system_prompt=prompt,
+                    callback_handler=handler,
+                )
+                raw = verdict_agent("Give your verdict now.")
+                text = validate_safe_content(validate_agent_output(_safe_agent_output(raw)))
+                verdict_text_holder.append(text or "The verdict could not be generated.")
+            except Exception as e:
+                logger.error(f"Token-streaming verdict failed: {e}")
+                verdict_text_holder.append("The verdict could not be generated. Please review the debate rounds above.")
+            finally:
+                verdict_q.put({"type": "_done"})
+
+        v_thread = threading.Thread(target=run_verdict, daemon=True)
+        v_thread.start()
+
+        while True:
+            try:
+                event = verdict_q.get(timeout=180)
+            except queue.Empty:
+                break
+            if event.get("type") == "_done":
+                break
+            if event.get("type") == "token":
+                yield {"type": "verdict_token", "text": event["text"]}
+
+        v_thread.join(timeout=5)
+        verdict = verdict_text_holder[0] if verdict_text_holder else "The verdict could not be generated."
+    elif len(completed) >= 1:
+        verdict = f"Only {len(completed)} of 5 rounds completed. Partial analysis."
+    else:
+        verdict = "The debate could not be completed."
+
+    elapsed = time.time() - start_time
+    logger.info(f"Token-streaming debate {debate_id} finished in {elapsed:.1f}s")
 
     resources = _get_resources(category)
 

@@ -120,6 +120,7 @@ Resources:
       Handler: lambda_handler.handler
       Timeout: 300
       MemorySize: 1024
+      Tracing: Active
       FunctionUrlConfig:
         AuthType: NONE
         Cors:
@@ -144,10 +145,29 @@ Resources:
               Action:
                 - bedrock:InvokeModel
                 - bedrock:InvokeModelWithResponseStream
+                - bedrock:ApplyGuardrail
               Resource:
                 - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/us.amazon.nova-pro-v1:0"
                 - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/us.amazon.nova-lite-v1:0"
                 - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/us.anthropic.claude-sonnet-4-20250514-v1:0"
+            - Effect: Allow
+              Action:
+                - bedrock:Retrieve
+              Resource: !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*"
+            - Effect: Allow
+              Action:
+                - polly:SynthesizeSpeech
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - comprehend:DetectSentiment
+                - comprehend:BatchDetectSentiment
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: "*"
 
   # ── Lambda: REST API (templates, journal, health) ──────────────
   RestApiFunction:
@@ -158,6 +178,7 @@ Resources:
       Handler: lambda_handler.handler
       Timeout: 29
       MemorySize: 256
+      Tracing: Active
       Environment:
         Variables:
           DIVERGE_DEBATES_TABLE: !Ref DebatesTable
@@ -193,6 +214,34 @@ Resources:
             RestApiId: !Ref ApiGateway
             Auth:
               Authorizer: CognitoAuth
+        ShareDebate:
+          Type: Api
+          Properties:
+            Path: /api/debate/share
+            Method: post
+            RestApiId: !Ref ApiGateway
+        GetShared:
+          Type: Api
+          Properties:
+            Path: /api/debate/shared/{share_id}
+            Method: get
+            RestApiId: !Ref ApiGateway
+        ChoosePath:
+          Type: Api
+          Properties:
+            Path: /api/debate/{debate_id}/choose
+            Method: post
+            RestApiId: !Ref ApiGateway
+            Auth:
+              Authorizer: CognitoAuth
+        Reflect:
+          Type: Api
+          Properties:
+            Path: /api/debate/{debate_id}/reflect
+            Method: post
+            RestApiId: !Ref ApiGateway
+            Auth:
+              Authorizer: CognitoAuth
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DebatesTable
@@ -224,8 +273,75 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
-  # NOTE: CloudFront resources removed temporarily (account verification pending).
-  # Once verified, re-add: CloudFrontOAC, CloudFrontDistribution, FrontendBucketPolicy.
+  # ── CloudFront CDN ────────────────────────────────────────────
+  # NOTE: Requires account verification. Deploy will fail if not verified.
+  # Comment out this section if CloudFront is blocked.
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: diverge-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt CloudFrontOAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: ApiOrigin
+            DomainName: !Sub "${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+            OriginPath: !Sub "/${Stage}"
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+        CacheBehaviors:
+          - PathPattern: "/api/*"
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
 
   # ── Budget Alerts ──────────────────────────────────────────────
   BedrockInvocationAlarm:
@@ -273,3 +389,7 @@ Outputs:
     Value: !GetAtt DebateFunctionUrl.FunctionUrl
   FrontendBucket:
     Value: !Ref FrontendBucket
+  CloudFrontDomain:
+    Value: !GetAtt CloudFrontDistribution.DomainName
+  CloudFrontDistributionId:
+    Value: !Ref CloudFrontDistribution

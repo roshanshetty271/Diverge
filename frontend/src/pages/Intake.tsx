@@ -6,6 +6,7 @@ import WritingSampleInput from "../components/WritingSampleInput";
 import { useToast } from "../components/Toast";
 import { sanitizeInput, sanitizeFinancialInput, validateDecisionInput } from "../utils/security";
 import { TEMPLATES } from "../utils/constants";
+import VoiceButton from "../components/VoiceButton";
 import type { DecisionInput } from "../types";
 
 const slideVariants = { enter: { opacity: 0, x: 20 }, center: { opacity: 1, x: 0 }, exit: { opacity: 0, x: -20 } };
@@ -124,11 +125,17 @@ export default function Intake() {
                 {userName.trim() ? `${userName.trim()}, you're deciding between:` : "You\u2019re deciding between:"}
               </h1>
               <div className="mt-8 space-y-3">
-                <input type="text" value={pathA} onChange={(e) => setPathA(e.target.value)} placeholder="Option A&#x2026;" aria-label="Option A"
-                  className="w-full bg-surface border border-surface-light rounded-lg p-4 text-ivory text-base focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200" />
+                <div className="flex gap-2">
+                  <input type="text" value={pathA} onChange={(e) => setPathA(e.target.value)} placeholder="Option A&#x2026;" aria-label="Option A"
+                    className="flex-1 bg-surface border border-surface-light rounded-lg p-4 text-ivory text-base focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200" />
+                  <VoiceButton onResult={(text) => setPathA((prev) => prev ? `${prev} ${text}` : text)} className="self-center" />
+                </div>
                 <p className="text-ivory-faint text-xs text-center uppercase tracking-widest">vs</p>
-                <input type="text" value={pathB} onChange={(e) => setPathB(e.target.value)} placeholder="Option B&#x2026;" aria-label="Option B"
-                  className="w-full bg-surface border border-surface-light rounded-lg p-4 text-ivory text-base focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200" />
+                <div className="flex gap-2">
+                  <input type="text" value={pathB} onChange={(e) => setPathB(e.target.value)} placeholder="Option B&#x2026;" aria-label="Option B"
+                    className="flex-1 bg-surface border border-surface-light rounded-lg p-4 text-ivory text-base focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200" />
+                  <VoiceButton onResult={(text) => setPathB((prev) => prev ? `${prev} ${text}` : text)} className="self-center" />
+                </div>
               </div>
               <p className="text-ivory-dim text-sm mt-8 leading-relaxed">Want to add some context? The more you share, the more specific the debate will be.</p>
               <p className="text-ivory-faint text-xs italic mt-1">Everything is optional.</p>

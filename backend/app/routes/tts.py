@@ -17,12 +17,26 @@ VALID_VOICES = {
 class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=5000)
     voice_id: str = Field("Matthew")
+    use_ssml: bool = Field(False)
+
+
+def _wrap_ssml(text: str) -> str:
+    """Wrap plain text in SSML with natural-sounding prosody for debate delivery."""
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        '<speak>'
+        '<prosody rate="95%" pitch="-2%">'
+        f'{escaped}'
+        '</prosody>'
+        '</speak>'
+    )
 
 
 @router.post("/tts")
 def synthesize_speech(req: TTSRequest):
     """Synthesize speech from text using Amazon Polly Neural engine.
 
+    Supports plain text and SSML for richer prosody control.
     Returns audio/mpeg stream. Frontend plays it directly via Audio element.
     """
     if req.voice_id not in VALID_VOICES:
@@ -34,12 +48,20 @@ def synthesize_speech(req: TTSRequest):
         settings = get_settings()
 
         polly = boto3.client("polly", region_name=settings.aws_region)
-        response = polly.synthesize_speech(
-            Text=req.text,
-            OutputFormat="mp3",
-            VoiceId=req.voice_id,
-            Engine="neural",
-        )
+
+        polly_params = {
+            "OutputFormat": "mp3",
+            "VoiceId": req.voice_id,
+            "Engine": "neural",
+        }
+
+        if req.use_ssml:
+            polly_params["Text"] = _wrap_ssml(req.text)
+            polly_params["TextType"] = "ssml"
+        else:
+            polly_params["Text"] = req.text
+
+        response = polly.synthesize_speech(**polly_params)
 
         audio_stream = response["AudioStream"].read()
         return Response(content=audio_stream, media_type="audio/mpeg")

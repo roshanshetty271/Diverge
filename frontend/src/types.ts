@@ -14,6 +14,18 @@ export interface RoundMetrics {
   path_b: PathMetrics;
 }
 
+export interface SentimentScores {
+  positive: number;
+  negative: number;
+  neutral: number;
+  mixed: number;
+}
+
+export interface RoundSentiment {
+  path_a: SentimentScores;
+  path_b: SentimentScores;
+}
+
 export interface RoundResult {
   round_number: number;
   round_name: string;
@@ -21,6 +33,7 @@ export interface RoundResult {
   alpha: string;
   beta: string;
   metrics: RoundMetrics | null;
+  sentiment?: RoundSentiment | null;
   status: "completed" | "partial";
 }
 

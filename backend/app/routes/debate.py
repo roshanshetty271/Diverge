@@ -16,8 +16,8 @@ import threading
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
-from app.schemas import DecisionInput, DebateResponse
-from app.orchestrator import run_debate, run_debate_streaming
+from app.schemas import DecisionInput, DebateResponse, InterjectionRequest
+from app.orchestrator import run_debate, run_debate_streaming, run_debate_token_streaming, set_interjection
 from app.security.rate_limiter import check_rate_limit
 from app.security.llm_security import sanitize_writing_samples, sanitize_user_input, detect_injection
 from app.security.safety import detect_crisis, detect_blocked_topic, CRISIS_RESOURCES
@@ -146,6 +146,96 @@ async def stream_debate(
         def worker():
             try:
                 for event in run_debate_streaming(user_context):
+                    q.put(event)
+            except Exception as e:
+                q.put({"type": "error", "message": str(e)})
+            q.put(None)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        while True:
+            event = await asyncio.to_thread(q.get)
+            if event is None:
+                break
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/debate/interject")
+def interject_debate(req: InterjectionRequest):
+    """Submit a user interjection to be included in the next debate round.
+
+    The interjection is picked up by the streaming orchestrator between rounds,
+    influencing both agents' arguments in the following round.
+    """
+    is_suspicious, pattern = detect_injection(req.text)
+    if is_suspicious:
+        raise HTTPException(status_code=400, detail="Your input contains patterns that can't be processed.")
+
+    sanitized = sanitize_user_input(req.text)
+    set_interjection(req.debate_id, sanitized)
+    logger.info(f"Interjection stored for debate {req.debate_id}: '{sanitized[:50]}...'")
+    return {"status": "ok"}
+
+
+@router.post("/debate/stream-tokens")
+async def stream_debate_tokens(
+    decision: DecisionInput,
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    """Stream debate with token-level granularity via SSE.
+
+    Yields individual tokens as agents generate them, enabling
+    real-time typewriter effect in the UI.
+    """
+    settings = get_settings()
+    if settings.origin_verify_header and settings.origin_verify_secret:
+        origin_header = request.headers.get(settings.origin_verify_header, "")
+        if origin_header != settings.origin_verify_secret:
+            raise HTTPException(status_code=403, detail="Access denied.")
+
+    all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
+    is_crisis, crisis_cat = detect_crisis(all_text)
+    if is_crisis:
+        logger.warning(f"Crisis signal detected in token-stream (category={crisis_cat})")
+        return JSONResponse({"type": "crisis", "category": crisis_cat, "resources": CRISIS_RESOURCES})
+
+    is_blocked, block_reason = detect_blocked_topic(decision.path_a, decision.path_b, decision.constraints or "")
+    if is_blocked:
+        raise HTTPException(status_code=400, detail=block_reason)
+
+    if user:
+        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")
+    else:
+        check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate")
+
+    for field_name, field_value in [("path_a", decision.path_a), ("path_b", decision.path_b)]:
+        is_suspicious, pattern = detect_injection(field_value)
+        if is_suspicious:
+            logger.warning(f"Injection detected in {field_name}: '{pattern}'")
+            raise HTTPException(status_code=400, detail="Your input contains patterns that can't be processed.")
+
+    user_context = decision.model_dump()
+    user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
+    user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
+    user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+
+    user_id = user["sub"] if user else "anonymous"
+    logger.info(f"Starting token-streaming debate: '{decision.path_a}' vs '{decision.path_b}' by {user_id}")
+
+    async def event_generator():
+        q: queue.Queue = queue.Queue()
+
+        def worker():
+            try:
+                for event in run_debate_token_streaming(user_context):
                     q.put(event)
             except Exception as e:
                 q.put({"type": "error", "message": str(e)})

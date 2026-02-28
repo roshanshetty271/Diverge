@@ -108,3 +108,37 @@ export async function emailResults(payload: EmailResultsPayload): Promise<{ stat
     body: JSON.stringify(payload),
   });
 }
+
+export async function sendInterjection(debateId: string, text: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`${DEBATE_BASE}/api/debate/interject`, {
+    method: "POST",
+    body: JSON.stringify({ debate_id: debateId, text }),
+  });
+}
+
+export async function shareDebate(debateData: Record<string, unknown>, inputData: Record<string, unknown>): Promise<{ share_id: string; url: string }> {
+  return apiFetch<{ share_id: string; url: string }>(`${API_BASE}/api/debate/share`, {
+    method: "POST",
+    body: JSON.stringify({ debate_data: debateData, input_data: inputData }),
+  });
+}
+
+export async function getSharedDebate(shareId: string): Promise<Record<string, unknown>> {
+  return apiFetch<Record<string, unknown>>(`${API_BASE}/api/debate/shared/${shareId}`);
+}
+
+export async function choosePath(debateId: string, chosenPath: string, token: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`${API_BASE}/api/debate/${debateId}/choose`, {
+    method: "POST",
+    body: JSON.stringify({ chosen_path: chosenPath }),
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function reflectOnDebate(debateId: string, satisfaction: number, note: string, token: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`${API_BASE}/api/debate/${debateId}/reflect`, {
+    method: "POST",
+    body: JSON.stringify({ satisfaction, note }),
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}

@@ -17,24 +17,45 @@ Team Sic Mundus | AWS 10,000 AIdeas Competition | Daily Life Enhancement
 
 ## What Makes It Different
 
-Adaptive rounds. Financial decisions get salary and savings analysis. Relationship decisions get emotional cost and reward. The debate adapts to you.
+**Token-by-token streaming.** Watch agents type their arguments in real time via SSE. Not blocks of text appearing at once — actual live thought generation.
 
-Voice matching. Paste some texts or emails. The agents argue in your voice, not generic assistant speak.
+**User interjection.** Between rounds, redirect the debate: "But what about the kids?" Both agents factor your input into their next argument.
 
-Monte Carlo grounding. Financial simulations and probability models back up the arguments with real numbers.
+**Adaptive rounds.** Financial decisions get salary and savings analysis. Relationship decisions get emotional cost and reward. The debate adapts to you.
 
-Decision journal. Every debate is logged. Over time, you calibrate your intuition.
+**Voice matching.** Paste some texts or emails. The agents argue in your voice, not generic assistant speak.
 
-## The Stack
+**Monte Carlo grounding.** Financial simulations and probability models back up the arguments with real numbers.
+
+**Animated fork visualization.** An SVG showing two diverging life paths with milestone nodes at Year 1, 3, 5, 10, and Deathbed. Click milestones to see snapshots.
+
+**Sentiment analysis.** Amazon Comprehend tracks emotional tone shifts across rounds for each path.
+
+**Shareable links.** Share any debate as a read-only URL. Judges, friends, or your therapist can see the full debate.
+
+**Voice input.** Speak your decision options via browser speech recognition.
+
+**PDF export.** Download a branded dark-themed decision report with full transcript, verdict, and resources.
+
+**Decision journal.** Every debate is logged. Record which path you chose. Reflect with satisfaction ratings over time.
+
+## The Stack (14 AWS Services)
 
 | Layer | Tech |
 |-------|------|
-| Frontend | React, Vite, Tailwind CSS, Framer Motion |
+| Frontend | React 18, Vite, Tailwind CSS 4, Framer Motion, Recharts |
 | Backend | FastAPI, Strands Agents SDK, Pydantic |
-| AI | Amazon Bedrock (Nova Pro / Nova Lite) |
-| Data | Amazon DynamoDB |
-| Auth | Amazon Cognito |
-| Infra | AWS Lambda, API Gateway, S3, CloudFront |
+| AI Models | Amazon Bedrock (Nova Pro v1, Nova Lite v1) |
+| RAG | Bedrock Knowledge Bases (S3 data source) |
+| Safety | Bedrock Guardrails + custom regex defense-in-depth |
+| Analytics | Amazon Comprehend (sentiment), Monte Carlo (financial) |
+| Voice | Amazon Polly Neural (TTS with SSML), Browser SpeechRecognition |
+| Email | Amazon SES (check-ins + results) |
+| Data | Amazon DynamoDB (debates, users, shared links) |
+| Auth | Amazon Cognito (OIDC, hosted UI) |
+| Compute | AWS Lambda (2 functions), Amazon API Gateway |
+| Hosting | Amazon S3 + CloudFront (OAC) |
+| Observability | AWS X-Ray (distributed tracing), CloudWatch (alarms) |
 
 ## Local Development
 

@@ -15,6 +15,7 @@ const Loading = lazy(() => import("@/pages/Loading"));
 const Debate = lazy(() => import("@/pages/Debate"));
 const Verdict = lazy(() => import("@/pages/Verdict"));
 const Journal = lazy(() => import("@/pages/Journal"));
+const SharedDebate = lazy(() => import("@/pages/SharedDebate"));
 const ErrorPage = lazy(() => import("@/pages/ErrorPage"));
 const CrisisResources = lazy(() => import("@/components/CrisisResources"));
 
@@ -53,6 +54,7 @@ export default function App() {
             <Route path="/debate" element={<Debate />} />
             <Route path="/verdict" element={<Verdict />} />
             <Route path="/journal" element={<RequireAuth fallbackMessage="Sign in to view your Decision Journal."><Journal /></RequireAuth>} />
+            <Route path="/d/:shareId" element={<SharedDebate />} />
             <Route path="/crisis" element={<CrisisResources />} />
             <Route path="*" element={<ErrorPage />} />
           </Routes>

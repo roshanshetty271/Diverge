@@ -2,9 +2,11 @@ import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { StaggerGroup, StaggerItem } from "../components/Stagger";
 import LifeTimeline from "../components/LifeTimeline";
+import ForkTimeline from "../components/ForkTimeline";
 import { useDivergeAuth } from "../hooks/useAuth";
 import { useToast } from "../components/Toast";
-import { saveDebate, scheduleCheckin, emailResults } from "../utils/api";
+import { saveDebate, scheduleCheckin, emailResults, shareDebate, choosePath } from "../utils/api";
+import { generateDebatePdf } from "../utils/exportPdf";
 import { loadDebateState } from "../utils/debateStorage";
 import type { DebateResponse, DecisionInput, Resource } from "../types";
 
@@ -68,6 +70,10 @@ export default function Verdict() {
   const [resultsSent, setResultsSent] = useState(false);
   const [resultsSending, setResultsSending] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [chosenPath, setChosenPath] = useState<string | null>(null);
+  const [choosingPath, setChoosingPath] = useState(false);
 
   if (!debate) {
     return (
@@ -166,6 +172,38 @@ export default function Verdict() {
     }
   };
 
+  const handleShare = async () => {
+    if (sharing || shareUrl) return;
+    setSharing(true);
+    try {
+      const res = await shareDebate(debate as Record<string, unknown>, (input || {}) as Record<string, unknown>);
+      const fullUrl = `${window.location.origin}${res.url}`;
+      setShareUrl(fullUrl);
+      await navigator.clipboard.writeText(fullUrl);
+      toast("Link copied to clipboard!");
+    } catch {
+      toast("Couldn\u2019t create share link. Try again.");
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const handleChoosePath = async (path: string) => {
+    if (choosingPath || !isAuthenticated || !token) return;
+    setChoosingPath(true);
+    try {
+      const debateId = debate.debate_id;
+      if (debateId) {
+        await choosePath(debateId, path, token);
+      }
+      setChosenPath(path);
+    } catch {
+      toast("Couldn\u2019t record your choice. Try again.");
+    } finally {
+      setChoosingPath(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -210,7 +248,10 @@ export default function Verdict() {
           {hasTimeline && (
             <StaggerItem className="mt-12">
               <p className="text-ivory-faint text-xs font-mono uppercase tracking-[0.2em] mb-6 text-center">Where each path takes you</p>
-              <LifeTimeline pathAName={pathAName} pathBName={pathBName} snapshotA={snapshotA} snapshotB={snapshotB} />
+              <ForkTimeline pathAName={pathAName} pathBName={pathBName} snapshotA={snapshotA} snapshotB={snapshotB} />
+              <div className="mt-6">
+                <LifeTimeline pathAName={pathAName} pathBName={pathBName} snapshotA={snapshotA} snapshotB={snapshotB} />
+              </div>
             </StaggerItem>
           )}
 
@@ -315,9 +356,9 @@ export default function Verdict() {
             <StaggerItem className="mt-8"><div className="text-ivory text-base leading-[1.75] whitespace-pre-line">{stripMarkdown(verdictText)}</div></StaggerItem>
           )}
 
-          <StaggerItem className="mt-12 flex gap-3 justify-center">
+          <StaggerItem className="mt-12 flex flex-wrap gap-3 justify-center">
             {saved ? (
-              <p className="text-path-safe text-sm font-mono">✓ Saved to your journal</p>
+              <p className="text-path-safe text-sm font-mono">&#x2713; Saved to your journal</p>
             ) : isAuthenticated ? (
               <button onClick={handleSave} disabled={saving} className="px-6 py-3 rounded-lg text-sm border border-path-safe text-ivory cursor-pointer transition-colors duration-200 hover:border-ivory disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-safe">
                 {saving ? "Saving\u2026" : "Save This Debate"}
@@ -325,8 +366,52 @@ export default function Verdict() {
             ) : (
               <button onClick={() => login()} className="px-6 py-3 rounded-lg text-sm border border-path-safe text-ivory cursor-pointer transition-colors duration-200 hover:border-ivory focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-safe">Sign In to Save</button>
             )}
+            {shareUrl ? (
+              <button onClick={() => { navigator.clipboard.writeText(shareUrl); toast("Link copied!"); }} className="px-6 py-3 rounded-lg text-sm border border-ivory-dim text-ivory-dim cursor-pointer transition-colors duration-200 hover:border-ivory hover:text-ivory">
+                &#x2713; Link Copied &mdash; Copy Again
+              </button>
+            ) : (
+              <button onClick={handleShare} disabled={sharing} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim cursor-pointer transition-colors duration-200 hover:border-ivory-dim disabled:opacity-50 focus-visible:outline-none">
+                {sharing ? "Creating link\u2026" : "Share This Debate"}
+              </button>
+            )}
+            <button
+              onClick={() => debate && generateDebatePdf(debate, input || null)}
+              className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim cursor-pointer transition-colors duration-200 hover:border-ivory-dim focus-visible:outline-none"
+            >
+              Download Report
+            </button>
             <button onClick={() => navigate("/decide")} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim cursor-pointer transition-colors duration-200 hover:border-ivory-dim focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ivory-dim">New Decision</button>
           </StaggerItem>
+
+          {/* Outcome tracking: which path did you choose? */}
+          {saved && !chosenPath && isAuthenticated && (
+            <StaggerItem className="mt-8 text-center">
+              <p className="text-ivory-dim text-sm mb-3">Which path did you choose?</p>
+              <div className="flex gap-3 justify-center">
+                <button
+                  onClick={() => handleChoosePath(pathAName)}
+                  disabled={choosingPath}
+                  className="px-5 py-2.5 rounded-lg text-sm border border-path-safe text-path-safe cursor-pointer transition-colors duration-200 hover:bg-path-safe hover:text-void disabled:opacity-50"
+                >
+                  {pathAName}
+                </button>
+                <button
+                  onClick={() => handleChoosePath(pathBName)}
+                  disabled={choosingPath}
+                  className="px-5 py-2.5 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-50"
+                >
+                  {pathBName}
+                </button>
+              </div>
+            </StaggerItem>
+          )}
+          {chosenPath && (
+            <StaggerItem className="mt-6 text-center">
+              <p className="text-ivory-dim text-sm">You chose: <span className="text-ivory font-medium">{chosenPath}</span></p>
+              <p className="text-ivory-faint text-xs mt-1">We&rsquo;ll check in with you to see how it goes.</p>
+            </StaggerItem>
+          )}
 
           <StaggerItem className="mt-16 text-center">
             <p className="font-display text-sm text-ivory-dim italic">Sic Mundus Creatus Est.</p>

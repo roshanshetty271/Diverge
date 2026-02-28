@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     kb_id: str = ""
     kb_region: str = ""
 
+    # Bedrock Guardrails (content safety)
+    guardrail_id: str = ""
+    guardrail_version: str = "DRAFT"
+
+    # Amazon Comprehend (sentiment analysis)
+    comprehend_enabled: bool = False
+
     model_config = {"env_file": ".env", "env_prefix": "DIVERGE_"}
 
     def get_all_cors_origins(self) -> list[str]:

@@ -24,6 +24,12 @@ class DecisionInput(BaseModel):
     writing_samples: Optional[str] = Field(None, max_length=2000)
 
 
+class InterjectionRequest(BaseModel):
+    """User interjection sent between debate rounds."""
+    debate_id: str = Field(..., min_length=1, max_length=100)
+    text: str = Field(..., min_length=1, max_length=500, description="What the user wants the agents to consider")
+
+
 class SaveDebateRequest(BaseModel):
     """Request to save a completed debate to the journal.
 
@@ -68,6 +74,20 @@ class RoundMetrics(BaseModel):
     path_b: PathMetrics
 
 
+class SentimentScores(BaseModel):
+    """Sentiment analysis scores from Amazon Comprehend."""
+    positive: float = 0.0
+    negative: float = 0.0
+    neutral: float = 0.0
+    mixed: float = 0.0
+
+
+class RoundSentiment(BaseModel):
+    """Sentiment for both paths in a round."""
+    path_a: SentimentScores = SentimentScores()
+    path_b: SentimentScores = SentimentScores()
+
+
 class RoundResult(BaseModel):
     """Complete result of one debate round."""
     round_number: int
@@ -76,6 +96,7 @@ class RoundResult(BaseModel):
     alpha: str
     beta: str
     metrics: Optional[RoundMetrics] = None
+    sentiment: Optional[RoundSentiment] = None
     status: str = "completed"
 
 
@@ -107,6 +128,23 @@ class TemplateResponse(BaseModel):
     question: str
     pathA: str
     pathB: str
+
+
+class ShareDebateRequest(BaseModel):
+    """Request to create a shareable link for a debate."""
+    debate_data: dict
+    input_data: dict
+
+
+class ChoosePathRequest(BaseModel):
+    """Request to record which path the user chose."""
+    chosen_path: str = Field(..., min_length=1, max_length=200)
+
+
+class ReflectionRequest(BaseModel):
+    """Request to record a reflection on a past decision."""
+    satisfaction: int = Field(..., ge=1, le=10)
+    note: str = Field("", max_length=1000)
 
 
 class HealthResponse(BaseModel):
