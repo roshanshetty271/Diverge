@@ -35,7 +35,7 @@ ROUNDS_BASE = [
      "focus": "It's been a full decade. Look back honestly. What did this path cost you? What's the ONE thing you lost that still stings? But then — what would haunt you MORE if you'd chosen the other path? This is where you get brutally honest. Rip apart the other version's decade: what did THEY lose that they're pretending doesn't matter?"},
     {"name": "The Knot", "title": "Final Words",
      "timeline": "looking back on all of it",
-     "focus": "Last chance. In under 80 words: what's the one thing they NEED to understand about this path that they can't see from where they're standing right now? Be direct. Be personal. Make it land."},
+     "focus": "Last chance. In under 80 words: what's the one thing they NEED to understand about this path that they can't see from where they're standing right now? Be direct. Be personal. Make it land. If you mention the deathbed, name a SPECIFIC face, place, or moment — not a concept. 'I never told Sarah' hits harder than 'I never pursued authenticity.'"},
 ]
 
 FINANCIAL_KEYWORDS = frozenset([
@@ -248,6 +248,13 @@ CRITICAL RULES:
 - This person came here because they're stuck. Help them SEE both futures clearly so THEY can decide. Don't decide for them unless one path is clearly just a fear of embarrassment.
 - NEVER say "find a balance between both." That's not helpful. Present both sides honestly and give a clear lean WITH caveats.
 - Be specific to THEIR situation. Reference specific things from the debate.
+- When relevant, weave in these research findings naturally (don't force them if they don't fit):
+  * People regret inaction far more than action over time, especially at 10+ years (Gilovich & Medvec, replicated 2022, n=988).
+  * Decision paralysis is driven by intolerance of uncertainty, not lack of information (2025 research). More thinking rarely helps.
+  * Habit formation takes 66 days on average (range 18-254), not 21 days (Lally/UCL, confirmed 2026). Change is slower than people expect.
+  * 67% of career changers report better satisfaction, but only 13% who want to switch actually do (2025).
+  * 90% of startups fail, but 42% fail from lack of product-market fit, not money (Digital Silk 2026).
+  Use these ONLY when they directly apply to this specific decision.
 
 Format your response with these exact section headers:
 
@@ -273,11 +280,18 @@ Year 1: [one vivid sentence — what their life looks like]
 Year 3: [one vivid sentence]
 Year 5: [one vivid sentence]
 Year 10: [one vivid sentence]
-Deathbed: [one sentence — their last thought about this choice]
+Deathbed: [one sentence — a specific image: a face, a name, a place, a sound. Not a philosophy. What flashes before their eyes about THIS choice? Make it visceral.]
 
 **Life Snapshot - {path_b}:**
 Year 1: [one vivid sentence — what their life looks like]
 Year 3: [one vivid sentence]
 Year 5: [one vivid sentence]
 Year 10: [one vivid sentence]
-Deathbed: [one sentence — their last thought about this choice]"""
+Deathbed: [one sentence — a specific image: a face, a name, a place, a sound. Not a philosophy. What flashes before their eyes about THIS choice? Make it visceral.]
+
+**Your next move:**
+[ONE specific, tiny action they can take in the next 24 hours. Not a life plan. Not "think about it more." A concrete micro-step so small it feels almost silly NOT to do it.
+- For social/relationship decisions: a specific text message or conversation starter they can copy-paste right now
+- For career/startup decisions: one 30-minute task (update a profile, write down 3 problems, email one person)
+- For lifestyle changes: one physical action (put running shoes by the door, throw out one thing, sign up for one class)
+Frame it as: "Right now, do this: ___"]"""

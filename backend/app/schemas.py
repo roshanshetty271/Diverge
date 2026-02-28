@@ -32,6 +32,15 @@ class SaveDebateRequest(BaseModel):
     debate_data: dict
 
 
+class CheckinRequest(BaseModel):
+    """Request to schedule follow-up check-in emails."""
+    email: str = Field(..., pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
+    path_a: str = Field(..., max_length=200)
+    path_b: str = Field(..., max_length=200)
+    micro_action: str = Field("", max_length=500)
+    user_name: str = Field("", max_length=50)
+
+
 # ── Response schemas ─────────────────────────────────────────────
 
 class PathMetrics(BaseModel):

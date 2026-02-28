@@ -4,7 +4,7 @@ import { StaggerGroup, StaggerItem } from "../components/Stagger";
 import LifeTimeline from "../components/LifeTimeline";
 import { useDivergeAuth } from "../hooks/useAuth";
 import { useToast } from "../components/Toast";
-import { saveDebate } from "../utils/api";
+import { saveDebate, scheduleCheckin } from "../utils/api";
 import { loadDebateState } from "../utils/debateStorage";
 import type { DebateResponse, DecisionInput } from "../types";
 
@@ -61,6 +61,9 @@ export default function Verdict() {
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [checkinEmail, setCheckinEmail] = useState("");
+  const [checkinSent, setCheckinSent] = useState(false);
+  const [checkinSending, setCheckinSending] = useState(false);
 
   if (!debate) {
     return (
@@ -107,10 +110,30 @@ export default function Verdict() {
   const winsB = extractPoints(parseSection(verdictText, ["Where jumping wins", `Where ${pathBName} wins`, "Path B wins", "where option b wins"], sectionSeparators)).map(stripMarkdown);
   const blindSpot = stripMarkdown(parseSection(verdictText, ["not seeing", "might not be seeing", "hidden assumption", "blind spot", "thing you're missing"], ["Based on", "lean toward", "question you", "overall"]));
   const lean = stripMarkdown(parseSection(verdictText, ["lean toward", "probably lean", "you'd lean", "you would lean", "i'd lean", "my lean", "i'd tell", "what i'd tell"], ["question you", "should actually", "reframed", "\n\n**"]));
+  const nextMove = stripMarkdown(parseSection(verdictText, ["your next move", "next move"], ["life snapshot", "\n\n**life"]));
   const snapshotA = parseLifeSnapshot(verdictText, pathAName);
   const snapshotB = parseLifeSnapshot(verdictText, pathBName);
   const hasTimeline = snapshotA.length >= 3 || snapshotB.length >= 3;
   const hasStructuredData = winsA.length > 0 || winsB.length > 0 || blindSpot.length > 20;
+
+  const handleCheckin = async () => {
+    if (!checkinEmail || checkinSending) return;
+    setCheckinSending(true);
+    try {
+      await scheduleCheckin({
+        email: checkinEmail,
+        path_a: pathAName,
+        path_b: pathBName,
+        micro_action: nextMove || "",
+        user_name: input?.user_name || "",
+      });
+      setCheckinSent(true);
+    } catch {
+      toast("Couldn\u2019t schedule check-in. Try saving your debate instead.");
+    } finally {
+      setCheckinSending(false);
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -166,6 +189,46 @@ export default function Verdict() {
               <p className="font-display text-lg text-path-risk mt-1" style={{ fontWeight: 500 }}>{lean}</p>
             </StaggerItem>
           )}
+
+          {nextMove && (
+            <StaggerItem className="mt-10">
+              <div className="bg-surface rounded-lg border border-surface-light border-l-4 border-l-path-risk p-6">
+                <p className="text-path-risk text-sm font-medium mb-3">Your next move</p>
+                <p className="text-ivory text-base leading-[1.75]">{nextMove}</p>
+                <p className="text-ivory-faint text-xs mt-3">Do this in the next 24 hours.</p>
+              </div>
+            </StaggerItem>
+          )}
+
+          <StaggerItem className="mt-8">
+            {checkinSent ? (
+              <div className="text-center">
+                <p className="text-path-safe text-sm font-mono">{"\u2713"} We'll check in at Day 7, 30, and 90.</p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3">
+                <p className="text-ivory-faint text-xs">Want us to check in with you?</p>
+                <div className="flex gap-2 w-full max-w-sm">
+                  <input
+                    type="email"
+                    value={checkinEmail}
+                    onChange={(e) => setCheckinEmail(e.target.value)}
+                    placeholder="your@email.com"
+                    onKeyDown={(e) => e.key === "Enter" && handleCheckin()}
+                    className="flex-1 bg-surface border border-surface-light rounded-lg px-4 py-2.5 text-ivory text-sm focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
+                  />
+                  <button
+                    onClick={handleCheckin}
+                    disabled={!checkinEmail || checkinSending}
+                    className="px-4 py-2.5 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk"
+                  >
+                    {checkinSending ? "Sending\u2026" : "Remind me"}
+                  </button>
+                </div>
+                <p className="text-ivory-faint/50 text-[10px]">3 emails: Day 7, Day 30, Day 90. That's it.</p>
+              </div>
+            )}
+          </StaggerItem>
 
           {!hasStructuredData && verdictText && (
             <StaggerItem className="mt-8"><div className="text-ivory text-base leading-[1.75] whitespace-pre-line">{stripMarkdown(verdictText)}</div></StaggerItem>

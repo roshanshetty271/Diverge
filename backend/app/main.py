@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.routes.debate import router as debate_router
 from app.routes.general import router as general_router
 from app.routes.tts import router as tts_router
+from app.routes.email import router as email_router
 from app.security.middleware import (
     SecurityHeadersMiddleware,
     RequestTrackingMiddleware,
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(debate_router)
     app.include_router(general_router)
     app.include_router(tts_router)
+    app.include_router(email_router)
 
     return app
 

@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     origin_verify_header: str = ""
     origin_verify_secret: str = ""
 
+    # SES (check-in emails)
+    ses_sender_email: str = ""
+    ses_region: str = "us-east-1"
+    checkins_table: str = "diverge-checkins"
+
     model_config = {"env_file": ".env", "env_prefix": "DIVERGE_"}
 
     def get_all_cors_origins(self) -> list[str]:

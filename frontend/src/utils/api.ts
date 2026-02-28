@@ -78,3 +78,18 @@ export async function saveDebate(debateData: Record<string, unknown>, token?: st
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
 }
+
+export interface CheckinPayload {
+  email: string;
+  path_a: string;
+  path_b: string;
+  micro_action: string;
+  user_name: string;
+}
+
+export async function scheduleCheckin(payload: CheckinPayload): Promise<{ status: string; message: string }> {
+  return apiFetch<{ status: string; message: string }>(`${API_BASE}/api/checkin`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
