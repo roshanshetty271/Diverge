@@ -12,7 +12,7 @@ export default function Templates() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-16">
-      <StaggerGroup className="w-full max-w-2xl">
+      <StaggerGroup className="w-full max-w-3xl">
         <StaggerItem className="text-center mb-10">
           <h1 className="font-display text-2xl text-ivory" style={{ fontWeight: 400 }}>What&rsquo;s on your mind?</h1>
           <p className="text-ivory-dim text-sm mt-2">Pick what&rsquo;s closest, or write your own.</p>

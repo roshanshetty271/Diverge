@@ -64,9 +64,9 @@ export default function Debate() {
       forceUpdate((c) => c + 1);
       const s = getDebateStream();
 
-      // Auto-advance to the round being streamed
-      if (s.streamingRound > 0) {
-        setCurrentRound(s.streamingRound);
+      // Only auto-advance to round 1 when it first starts (not subsequent rounds)
+      if (s.streamingRound === 1 && currentRound === 1 && s.rounds.length === 0) {
+        setCurrentRound(1);
       }
 
       if (s.done && s.input && s.rounds.length > 0) {
@@ -77,7 +77,7 @@ export default function Debate() {
       }
     });
     return unsub;
-  }, []);
+  }, [currentRound]);
 
   const revealAll = useCallback(() => {
     setVisibleMessages(2);
@@ -127,12 +127,16 @@ export default function Debate() {
     );
   }
 
-  // For step indicator, include streaming round if it hasn't completed yet
-  const displayRounds = isCurrentRoundStreaming && !hasCompletedRound
-    ? [...transcript, { round_number: stream.streamingRound, round_name: "", round_title: "", alpha: "", beta: "", metrics: null, status: "streaming" as const }]
-    : transcript;
+  // Always show all rounds in the step indicator from the start
+  const totalRoundsToShow = stream.totalRounds || 5;
+  const displayRounds = Array.from({ length: totalRoundsToShow }, (_, i) => {
+    if (transcript[i]) return transcript[i];
+    return { round_number: i + 1, round_name: ROUNDS[i]?.name || `Round ${i + 1}`, round_title: ROUNDS[i]?.title || "", alpha: "", beta: "", metrics: null, status: "pending" as const };
+  });
 
-  const safeRound = Math.max(1, Math.min(currentRound, Math.max(displayRounds.length, 1)));
+  // The highest round the user can navigate to: completed rounds + the currently streaming round
+  const highestAvailableRound = Math.max(transcript.length, stream.streamingRound > 0 ? stream.streamingRound : 0, 1);
+  const safeRound = Math.max(1, Math.min(currentRound, highestAvailableRound));
   const round = completedRound;
   const roundName = round?.round_name || ROUNDS[safeRound - 1]?.name || `Round ${safeRound}`;
   const roundTitle = round?.round_title || ROUNDS[safeRound - 1]?.title || "";
@@ -149,36 +153,43 @@ export default function Debate() {
 
   const heading = userName ? `${userName}\u2019s Decision` : "The Debate";
 
-  const isLastAvailableRound = safeRound >= transcript.length;
-  const moreRoundsGenerating = isStreaming && !stream.done && isLastAvailableRound && !isCurrentRoundStreaming;
-  const canGoVerdict = safeRound >= transcript.length && verdictReady;
+  // Has the user seen all content for this round?
   const bothDone = hasCompletedRound || (showAlpha && showBeta && !alphaIsStreaming && !betaIsStreaming && hasStreamingAlpha && hasStreamingBeta);
+  // Is the next round already available (completed or streaming)?
+  const nextRoundAvailable = safeRound < transcript.length || (isStreaming && stream.streamingRound > safeRound);
+  // Is the next round still being generated (not yet started)?
+  const nextRoundGenerating = isStreaming && !stream.done && safeRound >= transcript.length && stream.streamingRound <= safeRound && !isCurrentRoundStreaming;
+  const canGoVerdict = safeRound >= transcript.length && verdictReady;
 
   return (
     <div className="min-h-screen bg-void px-4 py-8 md:px-8">
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-4xl mx-auto">
 
         <p className="text-center text-ivory-faint text-xs font-mono uppercase tracking-widest mb-1">{heading}</p>
 
-        {/* Step indicator */}
+        {/* Step indicator — always shows all rounds */}
         <div className="flex justify-center items-center gap-1 mb-8">
           {displayRounds.map((r, i) => {
             const stepNum = i + 1;
             const isActive = stepNum === safeRound;
-            const isPast = stepNum < safeRound;
+            const isCompleted = stepNum <= transcript.length;
+            const isStreamingNow = isStreaming && stream.streamingRound === stepNum;
+            const isReachable = stepNum <= highestAvailableRound;
             const rName = r.round_name || ROUNDS[i]?.name || `R${stepNum}`;
             const shortName = rName.replace("The ", "");
             return (
               <div key={i} className="flex items-center gap-1">
-                {i > 0 && <span className={`w-4 md:w-6 h-px ${isPast || isActive ? "bg-path-risk" : "bg-surface-light"}`} />}
+                {i > 0 && <span className={`w-4 md:w-6 h-px ${isCompleted || isActive ? "bg-path-risk" : "bg-surface-light"}`} />}
                 <button
-                  onClick={() => stepNum <= transcript.length && setCurrentRound(stepNum)}
-                  className={`text-[10px] md:text-xs font-mono transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk rounded ${
+                  onClick={() => isReachable && setCurrentRound(stepNum)}
+                  className={`text-[10px] md:text-xs font-mono transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk rounded ${
                     isActive
-                      ? "text-path-risk font-medium"
-                      : isPast
-                        ? "text-ivory-dim hover:text-ivory"
-                        : "text-ivory-faint/40 cursor-default"
+                      ? "text-path-risk font-medium cursor-pointer"
+                      : isCompleted
+                        ? "text-ivory-dim hover:text-ivory cursor-pointer"
+                        : isStreamingNow
+                          ? "text-ivory-faint animate-pulse cursor-pointer"
+                          : "text-ivory-faint/30 cursor-default"
                   }`}
                 >
                   {shortName || `R${stepNum}`}
@@ -186,14 +197,6 @@ export default function Debate() {
               </div>
             );
           })}
-          {isStreaming && !stream.done && !isCurrentRoundStreaming && (
-            <div className="flex items-center gap-1">
-              <span className="w-4 md:w-6 h-px bg-surface-light" />
-              <span className="text-[10px] font-mono text-ivory-faint/40 animate-pulse">
-                {displayRounds.length + 1 <= 5 ? `R${displayRounds.length + 1}\u2026` : "\u2026"}
-              </span>
-            </div>
-          )}
         </div>
 
         {/* Round header */}
@@ -305,14 +308,14 @@ export default function Debate() {
         {/* Next / Generating / Verdict button */}
         {(isCurrentRoundStreaming ? bothDone : visibleMessages >= 2) && !alphaIsStreaming && !betaIsStreaming && (
           <div className="mt-8 text-center">
-            {moreRoundsGenerating ? (
-              <p className="text-ivory-faint text-xs font-mono animate-pulse">Generating next round&hellip;</p>
-            ) : canGoVerdict ? (
+            {canGoVerdict ? (
               <button onClick={() => navigate("/verdict", { state: { debate, input } })} className="px-8 py-3 rounded-lg text-sm bg-path-risk text-void font-medium transition-[opacity,box-shadow] duration-200 cursor-pointer hover:shadow-[0_0_20px_rgba(212,168,67,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-risk focus-visible:ring-offset-2 focus-visible:ring-offset-void">See the Verdict</button>
-            ) : safeRound < transcript.length ? (
+            ) : nextRoundAvailable ? (
               <button onClick={() => setCurrentRound((p) => p + 1)} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim hover:border-path-risk hover:text-ivory transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk">
                 {nextRoundName ? `Next: ${nextRoundName}` : "Next round"} &rarr;
               </button>
+            ) : nextRoundGenerating ? (
+              <p className="text-ivory-faint text-xs font-mono animate-pulse">Generating next round&hellip;</p>
             ) : !verdictReady && isStreaming && !stream.done ? (
               <p className="text-ivory-faint text-xs font-mono animate-pulse">
                 {stream.streamingAgent === "verdict" ? "The verdict is being written\u2026" : "Generating verdict\u2026"}

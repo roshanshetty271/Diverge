@@ -156,7 +156,7 @@ export async function startDebateStream(payload: DecisionInput): Promise<void> {
             }
             tokenBatch += event.text;
             if (batchTimer) clearTimeout(batchTimer);
-            batchTimer = setTimeout(flushBatch, 30);
+            batchTimer = setTimeout(flushBatch, 80);
 
           } else if (event.type === "verdict_token") {
             if (batchAgent !== "verdict") {
@@ -165,7 +165,7 @@ export async function startDebateStream(payload: DecisionInput): Promise<void> {
             }
             tokenBatch += event.text;
             if (batchTimer) clearTimeout(batchTimer);
-            batchTimer = setTimeout(flushBatch, 30);
+            batchTimer = setTimeout(flushBatch, 80);
 
           } else if (event.type === "agent_done") {
             flushBatch();

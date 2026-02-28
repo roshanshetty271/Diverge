@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     # Amazon Comprehend (sentiment analysis)
     comprehend_enabled: bool = False
 
+    # AgentCore Memory (debate session persistence)
+    agentcore_memory_id: str = ""
+
     model_config = {"env_file": ".env", "env_prefix": "DIVERGE_"}
 
     def get_all_cors_origins(self) -> list[str]:

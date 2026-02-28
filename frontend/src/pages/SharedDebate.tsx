@@ -64,7 +64,7 @@ export default function SharedDebate() {
 
   return (
     <div className="min-h-screen bg-void px-4 py-8 md:px-8">
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-4xl mx-auto">
         {/* Header */}
         <div className="text-center mb-2">
           <p className="text-ivory-faint text-[10px] font-mono uppercase tracking-[0.3em]">Shared Debate</p>

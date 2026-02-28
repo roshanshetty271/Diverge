@@ -11,6 +11,7 @@ Supports both OpenAI and Bedrock via DIVERGE_MODEL_PROVIDER setting.
 Token-level streaming supported via QueueCallbackHandler.
 """
 
+import re
 import uuid
 import time
 import random
@@ -35,6 +36,64 @@ from app.security.llm_security import validate_agent_output, validate_safe_conte
 from app.tools.comprehend import analyze_round_sentiment
 
 logger = logging.getLogger(__name__)
+
+# --------------- AI Slop Cleaner ---------------
+_SLOP_OPENERS = re.compile(
+    r"^\s*(?:"
+    r"Here'?s the thing[:\s—–-]*"
+    r"|The (?:uncomfortable |honest |real )?truth is[,:\s—–-]*"
+    r"|Let me be (?:clear|honest|real)[.:\s—–-]*"
+    r"|I'll be honest[,:\s—–-]*"
+    r"|I'm going to be honest[,:\s—–-]*"
+    r"|Can we talk about[:\s]*"
+    r"|Make no mistake[,:\s—–-]*"
+    r"|Picture this[.:\s—–-]*"
+    r"|Imagine this[.:\s—–-]*"
+    r"|Let me paint you a picture[.:\s—–-]*"
+    r"|Here's what I find interesting[.:\s—–-]*"
+    r"|Here's the (?:problem|deal)[.:\s—–-]*"
+    r"|Look[,:\s]+"
+    r"|Listen[,:\s]+"
+    r")",
+    re.IGNORECASE,
+)
+
+_SLOP_PHRASES = [
+    (re.compile(r"\bLet that sink in\.?", re.I), ""),
+    (re.compile(r"\bFull stop\.?", re.I), ""),
+    (re.compile(r"\bPeriod\.(?!\d)", re.I), ""),
+    (re.compile(r"\bGame[- ]?changer", re.I), "significant shift"),
+    (re.compile(r"\bDeep dive", re.I), "close look"),
+    (re.compile(r"\bAt the end of the day[,]?\s*", re.I), ""),
+    (re.compile(r"\bIt's worth noting\s*(?:that)?\s*", re.I), ""),
+    (re.compile(r"\bInterestingly,?\s*", re.I), ""),
+    (re.compile(r"\bCrucially,?\s*", re.I), ""),
+    (re.compile(r"\bImportantly,?\s*", re.I), ""),
+    (re.compile(r"\bnavigate(?:d|s)?\s+(?:the\s+)?(?:challenges?|complexit(?:y|ies)|landscape)", re.I), "deal with it"),
+    (re.compile(r"\bunpack\s+(?:this|that|it)", re.I), "explain it"),
+    (re.compile(r"\blean(?:ed|ing|s)?\s+into\b", re.I), "embraced"),
+    (re.compile(r"\bdouble(?:d|s)?\s+down\s+on\b", re.I), "committed to"),
+]
+
+_DOUBLE_HYPHEN = re.compile(r"(?<!\w)--(?!\w)")
+_MULTI_SPACE = re.compile(r" {2,}")
+_LEADING_SPACE_LINE = re.compile(r"^ +", re.MULTILINE)
+
+
+def _clean_ai_slop(text: str) -> str:
+    """Strip common AI-tell patterns from agent output."""
+    if not text:
+        return text
+    text = _SLOP_OPENERS.sub("", text, count=1)
+    for pattern, replacement in _SLOP_PHRASES:
+        text = pattern.sub(replacement, text)
+    text = _DOUBLE_HYPHEN.sub(" - ", text)
+    text = text.replace("\u2014", " - ")   # em dash
+    text = text.replace("\u2013", " - ")   # en dash
+    text = _MULTI_SPACE.sub(" ", text)
+    text = _LEADING_SPACE_LINE.sub("", text)
+    return text.strip()
+
 
 MAX_RETRIES = 3
 FINANCIAL_TOOLS = [monte_carlo_financial, get_salary_data, compare_cost_of_living, calculate_runway]
@@ -141,11 +200,11 @@ def _backoff_with_jitter(attempt: int) -> float:
 
 
 def _safe_agent_output(result) -> str:
-    """Safely convert agent output to string, handling None/empty."""
+    """Safely convert agent output to string, handling None/empty, then strip AI slop."""
     text = str(result) if result is not None else ""
     if text in ("None", "null", ""):
         return ""
-    return text.strip()
+    return _clean_ai_slop(text)
 
 
 def _assign_personas(brave: str, user_ctx: dict) -> tuple[dict, dict]:
@@ -313,6 +372,21 @@ def _get_resources(category: str) -> list:
         return []
 
 
+def _persist_to_agentcore_memory(debate_id: str, user_context: dict, transcript: list, verdict: str):
+    """Fire-and-forget: save debate to AgentCore Memory in a background thread."""
+    try:
+        from app.agentcore import save_debate_to_memory
+        user_id = user_context.get("user_id", "anonymous")
+        t = threading.Thread(
+            target=save_debate_to_memory,
+            args=(debate_id, user_id, user_context, transcript, verdict),
+            daemon=True,
+        )
+        t.start()
+    except Exception as e:
+        logger.debug("AgentCore Memory persistence skipped: %s", e)
+
+
 def run_debate(user_context: dict) -> DebateResponse:
     """Run the complete 5-round debate synchronously.
 
@@ -369,7 +443,7 @@ def run_debate(user_context: dict) -> DebateResponse:
 
     resources = _get_resources(category)
 
-    return DebateResponse(
+    response = DebateResponse(
         debate_id=debate_id,
         transcript=transcript,
         verdict=verdict,
@@ -378,6 +452,10 @@ def run_debate(user_context: dict) -> DebateResponse:
         total_rounds=len(rounds),
         resources=resources,
     )
+
+    _persist_to_agentcore_memory(debate_id, user_context, transcript, verdict)
+
+    return response
 
 
 def run_debate_streaming(user_context: dict):
@@ -744,3 +822,5 @@ def run_debate_token_streaming(user_context: dict):
         "total_rounds": len(rounds),
         "resources": [r.model_dump() for r in resources],
     }
+
+    _persist_to_agentcore_memory(debate_id, user_context, transcript, verdict)

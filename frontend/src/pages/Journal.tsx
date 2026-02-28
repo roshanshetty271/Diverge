@@ -83,7 +83,7 @@ export default function Journal() {
 
   return (
     <div className="min-h-screen bg-void px-6 py-16">
-      <div className="max-w-2xl mx-auto">
+      <div className="max-w-4xl mx-auto">
         <StaggerGroup>
           <StaggerItem>
             <h1 className="font-display text-2xl text-ivory" style={{ fontWeight: 400 }}>Decision Journal</h1>

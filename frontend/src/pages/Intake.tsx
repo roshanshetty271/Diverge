@@ -84,7 +84,7 @@ export default function Intake() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-16">
-      <div className="w-full max-w-lg">
+      <div className="w-full max-w-xl">
         <AnimatePresence mode="wait">
           {step === 0 && (
             <motion.div key="step0" variants={slideVariants} initial="enter" animate="center" exit="exit" transition={{ duration: 0.6 }}>

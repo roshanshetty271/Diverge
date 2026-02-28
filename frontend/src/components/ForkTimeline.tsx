@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 
 interface TimelineRow {
   label: string;
@@ -37,38 +37,37 @@ export default function ForkTimeline({ pathAName, pathBName, snapshotA, snapshot
 
   const maxRows = Math.max(snapshotA.length, snapshotB.length, 3);
 
-  // SVG dimensions
-  const W = 600;
-  const topY = 40;
-  const forkY = 80;
-  const bottomPadding = 30;
-  const stepY = 80;
-  const totalH = forkY + maxRows * stepY + bottomPadding;
-  const centerX = W / 2;
-  const spreadX = 160;
+  const textBoxW = 210;
+  const textBoxH = 90;
+  const textGap = 22;
 
-  // Build path coordinates: both paths start at center, then diverge
+  const spreadX = 160;
+  const sideSpace = textBoxW + textGap + 10;
+  const W = sideSpace + spreadX + 120 + spreadX + sideSpace;
+  const centerX = W / 2;
   const leftX = centerX - spreadX;
   const rightX = centerX + spreadX;
 
-  // Bezier curves for the fork
-  const pathAPath = `M ${centerX} ${topY} L ${centerX} ${forkY} C ${centerX} ${forkY + 40}, ${leftX} ${forkY + 20}, ${leftX} ${forkY + stepY}`;
-  const pathBPath = `M ${centerX} ${topY} L ${centerX} ${forkY} C ${centerX} ${forkY + 40}, ${rightX} ${forkY + 20}, ${rightX} ${forkY + stepY}`;
+  const topY = 40;
+  const forkY = 80;
+  const labelGap = 50;
+  const firstNodeY = forkY + labelGap + 40;
+  const stepY = 100;
+  const totalH = firstNodeY + maxRows * stepY + textBoxH / 2 + 20;
 
-  // Straight lines after the curve
-  const pathALine = `M ${leftX} ${forkY + stepY} L ${leftX} ${forkY + maxRows * stepY}`;
-  const pathBLine = `M ${rightX} ${forkY + stepY} L ${rightX} ${forkY + maxRows * stepY}`;
+  const pathACurve = `M ${centerX} ${topY} L ${centerX} ${forkY} C ${centerX} ${forkY + 40}, ${leftX} ${forkY + 10}, ${leftX} ${forkY + labelGap}`;
+  const pathBCurve = `M ${centerX} ${topY} L ${centerX} ${forkY} C ${centerX} ${forkY + 40}, ${rightX} ${forkY + 10}, ${rightX} ${forkY + labelGap}`;
+  const pathALine = `M ${leftX} ${forkY + labelGap} L ${leftX} ${firstNodeY + (maxRows - 1) * stepY}`;
+  const pathBLine = `M ${rightX} ${forkY + labelGap} L ${rightX} ${firstNodeY + (maxRows - 1) * stepY}`;
 
-  const getSnapshot = (rows: TimelineRow[], idx: number) => rows[idx] || null;
-
-  const truncName = (n: string) => n.length > 22 ? n.slice(0, 22) + "\u2026" : n;
+  const toggle = (key: string) => setExpandedNode((prev) => (prev === key ? null : key));
 
   return (
     <div className="w-full overflow-x-auto">
       <svg
         viewBox={`0 0 ${W} ${totalH}`}
-        className="w-full max-w-[600px] mx-auto"
-        style={{ minWidth: 320 }}
+        className="w-full mx-auto"
+        style={{ minWidth: 360 }}
       >
         {/* Fork point */}
         <motion.circle
@@ -87,79 +86,51 @@ export default function ForkTimeline({ pathAName, pathBName, snapshotA, snapshot
           THE FORK
         </motion.text>
 
-        {/* Path A (left, blue) */}
-        <motion.path
-          d={pathAPath}
-          fill="none"
-          stroke="#4a6fa5"
-          strokeWidth={2}
-          variants={PATH_DRAW}
-          initial="hidden"
-          animate="visible"
-        />
-        <motion.path
-          d={pathALine}
-          fill="none"
-          stroke="#4a6fa5"
-          strokeWidth={2}
-          strokeDasharray="4 4"
-          variants={PATH_DRAW}
-          initial="hidden"
-          animate="visible"
-          transition={{ delay: 0.5, duration: 1.5 }}
-        />
+        {/* Path A curve (left, blue) */}
+        <motion.path d={pathACurve} fill="none" stroke="#4a6fa5" strokeWidth={2}
+          variants={PATH_DRAW} initial="hidden" animate="visible" />
+        <motion.path d={pathALine} fill="none" stroke="#4a6fa5" strokeWidth={2} strokeDasharray="4 4"
+          variants={PATH_DRAW} initial="hidden" animate="visible"
+          transition={{ delay: 0.5, duration: 1.5 }} />
 
-        {/* Path B (right, gold) */}
-        <motion.path
-          d={pathBPath}
-          fill="none"
-          stroke="#d4a843"
-          strokeWidth={2}
-          variants={PATH_DRAW}
-          initial="hidden"
-          animate="visible"
-        />
-        <motion.path
-          d={pathBLine}
-          fill="none"
-          stroke="#d4a843"
-          strokeWidth={2}
-          strokeDasharray="4 4"
-          variants={PATH_DRAW}
-          initial="hidden"
-          animate="visible"
-          transition={{ delay: 0.5, duration: 1.5 }}
-        />
+        {/* Path B curve (right, gold) */}
+        <motion.path d={pathBCurve} fill="none" stroke="#d4a843" strokeWidth={2}
+          variants={PATH_DRAW} initial="hidden" animate="visible" />
+        <motion.path d={pathBLine} fill="none" stroke="#d4a843" strokeWidth={2} strokeDasharray="4 4"
+          variants={PATH_DRAW} initial="hidden" animate="visible"
+          transition={{ delay: 0.5, duration: 1.5 }} />
 
-        {/* Path labels at top */}
+        {/* Path labels - positioned to the outer side, below the curve end */}
         <motion.text
-          x={leftX} y={forkY + stepY - 20}
-          textAnchor="middle"
-          className="fill-[#4a6fa5] text-[11px] font-medium"
+          x={leftX - 16} y={forkY + labelGap + 14}
+          textAnchor="end"
+          className="fill-[#4a6fa5] text-[12px] font-medium"
           variants={LABEL_APPEAR(0.6)}
           initial="hidden" animate="visible"
         >
-          {truncName(pathAName)}
+          {pathAName.length > 24 ? pathAName.slice(0, 24) + "\u2026" : pathAName}
         </motion.text>
         <motion.text
-          x={rightX} y={forkY + stepY - 20}
-          textAnchor="middle"
-          className="fill-[#d4a843] text-[11px] font-medium"
+          x={rightX + 16} y={forkY + labelGap + 14}
+          textAnchor="start"
+          className="fill-[#d4a843] text-[12px] font-medium"
           variants={LABEL_APPEAR(0.6)}
           initial="hidden" animate="visible"
         >
-          {truncName(pathBName)}
+          {pathBName.length > 24 ? pathBName.slice(0, 24) + "\u2026" : pathBName}
         </motion.text>
 
-        {/* Milestone nodes */}
+        {/* Milestone rows */}
         {Array.from({ length: maxRows }).map((_, i) => {
-          const y = forkY + (i + 1) * stepY;
+          const y = firstNodeY + i * stepY;
           const delay = 0.8 + i * 0.3;
           const milestone = MILESTONES[i] || `Year ${(i + 1) * 2}`;
-          const snapA = getSnapshot(snapshotA, i);
-          const snapB = getSnapshot(snapshotB, i);
-          const nodeKeyA = `a-${i}`;
-          const nodeKeyB = `b-${i}`;
+          const snapA = snapshotA[i] || null;
+          const snapB = snapshotB[i] || null;
+          const keyA = `a-${i}`;
+          const keyB = `b-${i}`;
+          const isExpandedA = expandedNode === keyA;
+          const isExpandedB = expandedNode === keyB;
 
           return (
             <g key={i}>
@@ -167,55 +138,92 @@ export default function ForkTimeline({ pathAName, pathBName, snapshotA, snapshot
               <motion.text
                 x={centerX} y={y + 4}
                 textAnchor="middle"
-                className="fill-ivory-faint text-[9px] font-mono uppercase tracking-wider"
+                className="fill-ivory-faint text-[10px] font-mono uppercase tracking-wider"
                 variants={LABEL_APPEAR(delay)}
                 initial="hidden" animate="visible"
               >
                 {milestone}
               </motion.text>
 
-              {/* Path A node */}
+              {/* --- Path A node --- */}
+              {snapA && !isExpandedA && (
+                <circle cx={leftX} cy={y} r={7} fill="none" stroke="#4a6fa5" strokeWidth={1.5} opacity={0.4}>
+                  <animate attributeName="r" values="7;14;7" dur="2.5s" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0.5;0;0.5" dur="2.5s" repeatCount="indefinite" />
+                </circle>
+              )}
               <motion.circle
-                cx={leftX} cy={y} r={snapA ? 8 : 4}
+                cx={leftX} cy={y} r={snapA ? 7 : 4}
                 className={snapA ? "fill-[#4a6fa5] cursor-pointer" : "fill-surface-light"}
                 variants={NODE_APPEAR(delay)}
                 initial="hidden" animate="visible"
-                onClick={() => snapA && setExpandedNode(expandedNode === nodeKeyA ? null : nodeKeyA)}
-                style={snapA ? { filter: expandedNode === nodeKeyA ? "drop-shadow(0 0 6px #4a6fa5)" : "none" } : {}}
+                onClick={() => snapA && toggle(keyA)}
+                style={isExpandedA ? { filter: "drop-shadow(0 0 6px #4a6fa5)" } : {}}
               />
-              {/* Path A tooltip */}
-              {expandedNode === nodeKeyA && snapA && (
-                <foreignObject x={leftX - 120} y={y + 14} width={240} height={80}>
-                  <div className="bg-surface border border-path-safe rounded-lg p-2.5 text-[11px] text-ivory leading-snug">
-                    {snapA.text}
-                  </div>
-                </foreignObject>
-              )}
 
-              {/* Path B node */}
+              {/* Path A text - to the LEFT of the dot */}
+              <AnimatePresence>
+                {isExpandedA && snapA && (
+                  <motion.foreignObject
+                    x={leftX - textGap - textBoxW}
+                    y={y - textBoxH / 2}
+                    width={textBoxW}
+                    height={textBoxH}
+                    initial={{ opacity: 0, x: 10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 10 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    <div className="h-full flex items-center justify-end">
+                      <p className="text-ivory text-xs leading-snug text-right bg-surface/90 border border-[#4a6fa5]/30 rounded-lg px-3 py-2">
+                        {snapA.text}
+                      </p>
+                    </div>
+                  </motion.foreignObject>
+                )}
+              </AnimatePresence>
+
+              {/* --- Path B node --- */}
+              {snapB && !isExpandedB && (
+                <circle cx={rightX} cy={y} r={7} fill="none" stroke="#d4a843" strokeWidth={1.5} opacity={0.4}>
+                  <animate attributeName="r" values="7;14;7" dur="2.5s" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0.5;0;0.5" dur="2.5s" repeatCount="indefinite" />
+                </circle>
+              )}
               <motion.circle
-                cx={rightX} cy={y} r={snapB ? 8 : 4}
+                cx={rightX} cy={y} r={snapB ? 7 : 4}
                 className={snapB ? "fill-[#d4a843] cursor-pointer" : "fill-surface-light"}
                 variants={NODE_APPEAR(delay)}
                 initial="hidden" animate="visible"
-                onClick={() => snapB && setExpandedNode(expandedNode === nodeKeyB ? null : nodeKeyB)}
-                style={snapB ? { filter: expandedNode === nodeKeyB ? "drop-shadow(0 0 6px #d4a843)" : "none" } : {}}
+                onClick={() => snapB && toggle(keyB)}
+                style={isExpandedB ? { filter: "drop-shadow(0 0 6px #d4a843)" } : {}}
               />
-              {/* Path B tooltip */}
-              {expandedNode === nodeKeyB && snapB && (
-                <foreignObject x={rightX - 120} y={y + 14} width={240} height={80}>
-                  <div className="bg-surface border border-path-risk rounded-lg p-2.5 text-[11px] text-ivory leading-snug">
-                    {snapB.text}
-                  </div>
-                </foreignObject>
-              )}
+
+              {/* Path B text - to the RIGHT of the dot */}
+              <AnimatePresence>
+                {isExpandedB && snapB && (
+                  <motion.foreignObject
+                    x={rightX + textGap}
+                    y={y - textBoxH / 2}
+                    width={textBoxW}
+                    height={textBoxH}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -10 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    <div className="h-full flex items-center justify-start">
+                      <p className="text-ivory text-xs leading-snug text-left bg-surface/90 border border-[#d4a843]/30 rounded-lg px-3 py-2">
+                        {snapB.text}
+                      </p>
+                    </div>
+                  </motion.foreignObject>
+                )}
+              </AnimatePresence>
             </g>
           );
         })}
       </svg>
-      {(snapshotA.length > 0 || snapshotB.length > 0) && (
-        <p className="text-ivory-faint/40 text-[10px] text-center mt-2">Click a milestone to see what happens</p>
-      )}
     </div>
   );
 }

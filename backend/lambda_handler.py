@@ -1,6 +1,9 @@
 """AWS Lambda handler for Diverge API.
 
-Uses Mangum to wrap FastAPI for Lambda.
+Supports two invocation paths:
+  1. API Gateway / Function URL → Mangum wraps FastAPI (default)
+  2. Bedrock Agent Action Group → routes to dedicated handler
+
 X-Ray tracing patches boto3 for automatic subsegment creation.
 """
 
@@ -14,4 +17,11 @@ if os.environ.get("AWS_XRAY_DAEMON_ADDRESS") or os.environ.get("_X_AMZN_TRACE_ID
 from mangum import Mangum
 from app.main import app
 
-handler = Mangum(app, lifespan="off")
+_mangum_handler = Mangum(app, lifespan="off")
+
+
+def handler(event, context):
+    from app.bedrock_agent_handler import is_bedrock_agent_event, handle_bedrock_agent_event
+    if is_bedrock_agent_event(event):
+        return handle_bedrock_agent_event(event)
+    return _mangum_handler(event, context)

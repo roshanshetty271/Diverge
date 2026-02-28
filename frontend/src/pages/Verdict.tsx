@@ -26,6 +26,9 @@ function stripMarkdown(text: string): string {
     .replace(RE_LIST_MARKERS, "")
     .replace(RE_MD_LINKS, "$1")
     .replace(RE_INLINE_CODE, "$1")
+    .replace(/(?<!\w)--(?!\w)/g, " - ")
+    .replace(/\u2014/g, " - ")
+    .replace(/\u2013/g, " - ")
     .trim();
 }
 
@@ -218,7 +221,7 @@ export default function Verdict() {
 
   return (
     <div className="min-h-screen bg-void px-6 py-16">
-      <div className="max-w-2xl mx-auto">
+      <div className="max-w-5xl mx-auto">
         <StaggerGroup>
           <StaggerItem className="text-center">
             <div className="w-16 h-px bg-path-risk mx-auto" />
@@ -247,7 +250,8 @@ export default function Verdict() {
 
           {hasTimeline && (
             <StaggerItem className="mt-12">
-              <p className="text-ivory-faint text-xs font-mono uppercase tracking-[0.2em] mb-6 text-center">Where each path takes you</p>
+              <p className="text-ivory-faint text-xs font-mono uppercase tracking-[0.2em] mb-1 text-center">Where each path takes you</p>
+              <p className="text-ivory-faint/60 text-xs text-center mb-4">Tap a glowing node to reveal its future</p>
               <ForkTimeline pathAName={pathAName} pathBName={pathBName} snapshotA={snapshotA} snapshotB={snapshotB} />
               <div className="mt-6">
                 <LifeTimeline pathAName={pathAName} pathBName={pathBName} snapshotA={snapshotA} snapshotB={snapshotB} />
@@ -301,7 +305,7 @@ export default function Verdict() {
               ) : copied ? (
                 <p className="text-path-safe text-sm font-mono text-center mt-4">{"\u2713"} Results copied to clipboard.</p>
               ) : (
-                <div className="flex gap-2 mt-4 max-w-sm mx-auto">
+                <div className="flex gap-2 mt-4 max-w-md mx-auto">
                   <input
                     type="email"
                     value={resultsEmail}
