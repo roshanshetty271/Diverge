@@ -69,6 +69,7 @@ class Settings(BaseSettings):
 
     # Bedrock Knowledge Base (for research_insight tool)
     kb_id: str = ""
+    kb_region: str = ""
 
     model_config = {"env_file": ".env", "env_prefix": "DIVERGE_"}
 

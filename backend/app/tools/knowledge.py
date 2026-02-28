@@ -51,7 +51,8 @@ def _bedrock_search(query: str, kb_id: str, top_k: int = 3) -> list[dict]:
         import boto3
         from app.config import get_settings
         settings = get_settings()
-        client = boto3.client("bedrock-agent-runtime", region_name=settings.aws_region)
+        region = settings.kb_region or settings.aws_region
+        client = boto3.client("bedrock-agent-runtime", region_name=region)
         response = client.retrieve(
             knowledgeBaseId=kb_id,
             retrievalQuery={"text": query},
