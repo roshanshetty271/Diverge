@@ -1,0 +1,275 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Diverge — Decision intelligence engine.
+  Team Sic Mundus | AWS 10,000 AIdeas Competition
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 1024
+    Runtime: python3.12
+    Environment:
+      Variables:
+        DIVERGE_AWS_REGION: !Ref AWS::Region
+        DIVERGE_DEBATE_MODEL_ID: us.amazon.nova-pro-v1:0
+        DIVERGE_METRICS_MODEL_ID: us.amazon.nova-lite-v1:0
+        DIVERGE_DEBUG: "false"
+
+Parameters:
+  Stage:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, prod]
+
+Resources:
+  # ── Cognito ────────────────────────────────────────────────────
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: diverge-users
+      AutoVerifiedAttributes: [email]
+      UsernameAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+
+  # After deploy, add CloudFront URL to Cognito via Console:
+  #   Cognito → diverge-users → App client → Edit hosted UI
+  #   Add https://YOUR_CLOUDFRONT_DOMAIN to Callback + Logout URLs
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: diverge-web
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [email, openid, profile]
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+        - http://localhost:5173
+      LogoutURLs:
+        - http://localhost:5173
+      SupportedIdentityProviders: [COGNITO]
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub diverge-${AWS::AccountId}
+      UserPoolId: !Ref UserPool
+
+  # ── DynamoDB ───────────────────────────────────────────────────
+  DebatesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: diverge-debates
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: debate_id
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: debate_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: user-debates-index
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: diverge-users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+
+  # ── Lambda: Debate (long-running, uses Function URL) ───────────
+  DebateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: diverge-debate
+      CodeUri: backend/
+      Handler: lambda_handler.handler
+      Timeout: 300
+      MemorySize: 1024
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins: ["*"]
+          AllowMethods: ["POST"]
+          AllowHeaders: ["Content-Type", "Authorization"]
+      Environment:
+        Variables:
+          DIVERGE_DEBATES_TABLE: !Ref DebatesTable
+          DIVERGE_USERS_TABLE: !Ref UsersTable
+          DIVERGE_COGNITO_USER_POOL_ID: !Ref UserPool
+          DIVERGE_COGNITO_CLIENT_ID: !Ref UserPoolClient
+          DIVERGE_ORIGIN_VERIFY_HEADER: "x-origin-verify"
+          DIVERGE_ORIGIN_VERIFY_SECRET: !Sub "diverge-${AWS::AccountId}-origin-secret"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DebatesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+              Resource:
+                - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/us.amazon.nova-pro-v1:0"
+                - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/us.amazon.nova-lite-v1:0"
+                - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/us.anthropic.claude-sonnet-4-20250514-v1:0"
+
+  # ── Lambda: REST API (templates, journal, health) ──────────────
+  RestApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: diverge-rest
+      CodeUri: backend/
+      Handler: lambda_handler.handler
+      Timeout: 29
+      MemorySize: 256
+      Environment:
+        Variables:
+          DIVERGE_DEBATES_TABLE: !Ref DebatesTable
+          DIVERGE_USERS_TABLE: !Ref UsersTable
+          DIVERGE_COGNITO_USER_POOL_ID: !Ref UserPool
+          DIVERGE_COGNITO_CLIENT_ID: !Ref UserPoolClient
+      Events:
+        Health:
+          Type: Api
+          Properties:
+            Path: /api/health
+            Method: get
+            RestApiId: !Ref ApiGateway
+        Templates:
+          Type: Api
+          Properties:
+            Path: /api/templates
+            Method: get
+            RestApiId: !Ref ApiGateway
+        Journal:
+          Type: Api
+          Properties:
+            Path: /api/journal
+            Method: get
+            RestApiId: !Ref ApiGateway
+            Auth:
+              Authorizer: CognitoAuth
+        SaveDebate:
+          Type: Api
+          Properties:
+            Path: /api/debate/save
+            Method: post
+            RestApiId: !Ref ApiGateway
+            Auth:
+              Authorizer: CognitoAuth
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DebatesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action: cognito-idp:DescribeUserPool
+              Resource: !GetAtt UserPool.Arn
+
+  # ── API Gateway ────────────────────────────────────────────────
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Stage
+      Auth:
+        Authorizers:
+          CognitoAuth:
+            UserPoolArn: !GetAtt UserPool.Arn
+
+  # ── S3: Frontend Hosting ───────────────────────────────────────
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub diverge-frontend-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # NOTE: CloudFront resources removed temporarily (account verification pending).
+  # Once verified, re-add: CloudFrontOAC, CloudFrontDistribution, FrontendBucketPolicy.
+
+  # ── Budget Alerts ──────────────────────────────────────────────
+  BedrockInvocationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: diverge-bedrock-invocations-high
+      AlarmDescription: >
+        Bedrock invocations exceeded 500/hour — potential abuse or runaway loop.
+      Namespace: AWS/Bedrock
+      MetricName: Invocations
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 500
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: diverge-debate-errors-high
+      AlarmDescription: Debate Lambda error rate exceeded 10 in 5 minutes
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DebateFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  CognitoDomain:
+    Value: !Sub https://diverge-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com
+  ApiUrl:
+    Value: !Sub https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Stage}
+  DebateFunctionUrl:
+    Value: !GetAtt DebateFunctionUrl.FunctionUrl
+  FrontendBucket:
+    Value: !Ref FrontendBucket

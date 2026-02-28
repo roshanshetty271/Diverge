@@ -1,0 +1,161 @@
+import { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { StaggerGroup, StaggerItem } from "../components/Stagger";
+import { useDivergeAuth } from "../hooks/useAuth";
+import { useToast } from "../components/Toast";
+import { saveDebate } from "../utils/api";
+import { loadDebateState } from "../utils/debateStorage";
+import type { DebateResponse, DecisionInput } from "../types";
+
+const RE_BOLD = /\*\*/g;
+const RE_HEADINGS = /^#{1,6}\s+/gm;
+const RE_LIST_MARKERS = /^\s*[-*]\s+/gm;
+const RE_MD_LINKS = /\[([^\]]+)\]\([^)]+\)/g;
+const RE_INLINE_CODE = /`([^`]+)`/g;
+const RE_POINT_PREFIX = /^\*?\*?[-•*]\s*/;
+const RE_POINT_NUMBER = /^\d+[.)]\s*/;
+const RE_LEADING_SEPARATOR = /^[:\s*]+/;
+
+function stripMarkdown(text: string): string {
+  return text
+    .replace(RE_BOLD, "")
+    .replace(RE_HEADINGS, "")
+    .replace(RE_LIST_MARKERS, "")
+    .replace(RE_MD_LINKS, "$1")
+    .replace(RE_INLINE_CODE, "$1")
+    .trim();
+}
+
+export default function Verdict() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const locationState = (location.state || {}) as { debate?: DebateResponse; input?: DecisionInput };
+  const stored = !locationState.debate ? loadDebateState() : null;
+  const debate = locationState.debate || stored?.debate;
+  const input = locationState.input || stored?.input;
+  const { isAuthenticated, token, userId, login } = useDivergeAuth();
+  const { toast } = useToast();
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  if (!debate) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-ivory-dim">The timeline has diverged. <button onClick={() => navigate("/decide")} className="text-path-risk underline cursor-pointer">Start over</button></p>
+      </div>
+    );
+  }
+
+  const verdictText = debate.verdict || "";
+  const pathAName = input?.path_a || "Option A";
+  const pathBName = input?.path_b || "Option B";
+
+  const parseSection = (text: string, markers: string[], endMarkers: string[]): string => {
+    if (!text) return "";
+    const lowerText = text.toLowerCase();
+    for (const marker of markers) {
+      const idx = lowerText.indexOf(marker.toLowerCase());
+      if (idx === -1) continue;
+      const after = text.slice(idx + marker.length).replace(RE_LEADING_SEPARATOR, "");
+      let best = after;
+      for (const end of endMarkers) {
+        if (!end) continue;
+        const endIdx = after.toLowerCase().indexOf(end.toLowerCase());
+        if (endIdx > 0 && endIdx < best.length) best = after.slice(0, endIdx);
+      }
+      const result = best.trim();
+      if (result.length > 5) return result;
+    }
+    return "";
+  };
+
+  const extractPoints = (text: string): string[] => {
+    if (!text) return [];
+    return text
+      .split(/\n/)
+      .map((l) => l.replace(RE_POINT_PREFIX, "").replace(RE_POINT_NUMBER, "").replace(RE_BOLD, "").trim())
+      .filter((l) => l.length > 5)
+      .slice(0, 3);
+  };
+
+  const sectionSeparators = ["thing you", "hidden assumption", "not seeing", "blind spot", "Based on", "lean toward", "question you"];
+  const winsA = extractPoints(parseSection(verdictText, ["Where staying wins", `Where ${pathAName} wins`, "Path A wins", "where option a wins"], [`Where ${pathBName}`, "Where jumping", "Path B wins", "where option b wins", ...sectionSeparators])).map(stripMarkdown);
+  const winsB = extractPoints(parseSection(verdictText, ["Where jumping wins", `Where ${pathBName} wins`, "Path B wins", "where option b wins"], sectionSeparators)).map(stripMarkdown);
+  const blindSpot = stripMarkdown(parseSection(verdictText, ["not seeing", "might not be seeing", "hidden assumption", "blind spot", "thing you're missing"], ["Based on", "lean toward", "question you", "overall"]));
+  const lean = stripMarkdown(parseSection(verdictText, ["lean toward", "probably lean", "you'd lean", "you would lean", "i'd lean", "my lean"], ["question you", "should actually", "reframed", "\n\n**"]));
+  const hasStructuredData = winsA.length > 0 || winsB.length > 0 || blindSpot.length > 20;
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await saveDebate({ debate_data: { ...debate, input } }, token || undefined);
+      setSaved(true);
+    } catch (err) {
+      toast("Failed to save: " + (err instanceof Error ? err.message : "Unknown error"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-void px-6 py-16">
+      <div className="max-w-2xl mx-auto">
+        <StaggerGroup>
+          <StaggerItem className="text-center">
+            <div className="w-16 h-px bg-path-risk mx-auto" />
+            <p className="text-ivory-faint text-xs font-mono uppercase tracking-[0.25em] mt-4">The Verdict</p>
+          </StaggerItem>
+
+          {hasStructuredData && (
+            <StaggerItem className="mt-12 grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="border-l-2 border-path-safe pl-5 py-2">
+                <p className="text-path-safe text-sm font-medium mb-3">Where {pathAName} wins</p>
+                <div className="space-y-2">{winsA.length > 0 ? winsA.map((p, i) => <p key={i} className="text-ivory text-sm leading-relaxed"><span className="text-path-safe mr-2">·</span>{p}</p>) : <p className="text-ivory-dim text-sm italic">See full verdict below</p>}</div>
+              </div>
+              <div className="border-l-2 border-path-risk pl-5 py-2">
+                <p className="text-path-risk text-sm font-medium mb-3">Where {pathBName} wins</p>
+                <div className="space-y-2">{winsB.length > 0 ? winsB.map((p, i) => <p key={i} className="text-ivory text-sm leading-relaxed"><span className="text-path-risk mr-2">·</span>{p}</p>) : <p className="text-ivory-dim text-sm italic">See full verdict below</p>}</div>
+              </div>
+            </StaggerItem>
+          )}
+
+          <StaggerItem className="mt-12">
+            <div className="bg-surface rounded-lg border border-surface-light border-l-4 border-l-path-risk p-6">
+              <p className="text-path-risk text-sm font-medium mb-3">The thing you might not be seeing</p>
+              <p className="text-ivory text-base leading-[1.75]">{blindSpot || stripMarkdown(verdictText) || "The verdict is being prepared\u2026"}</p>
+            </div>
+          </StaggerItem>
+
+          {lean && (
+            <StaggerItem className="mt-10">
+              <p className="text-ivory-dim text-sm">Based on what you said matters to you, you&rsquo;d probably lean toward</p>
+              <p className="font-display text-lg text-path-risk mt-1" style={{ fontWeight: 500 }}>{lean}</p>
+            </StaggerItem>
+          )}
+
+          {!hasStructuredData && verdictText && (
+            <StaggerItem className="mt-8"><div className="text-ivory text-base leading-[1.75] whitespace-pre-line">{stripMarkdown(verdictText)}</div></StaggerItem>
+          )}
+
+          <StaggerItem className="mt-12 flex gap-3 justify-center">
+            {saved ? (
+              <p className="text-path-safe text-sm font-mono">✓ Saved to your journal</p>
+            ) : isAuthenticated ? (
+              <button onClick={handleSave} disabled={saving} className="px-6 py-3 rounded-lg text-sm border border-path-safe text-ivory cursor-pointer transition-colors duration-200 hover:border-ivory disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-safe">
+                {saving ? "Saving\u2026" : "Save This Debate"}
+              </button>
+            ) : (
+              <button onClick={() => login()} className="px-6 py-3 rounded-lg text-sm border border-path-safe text-ivory cursor-pointer transition-colors duration-200 hover:border-ivory focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-safe">Sign In to Save</button>
+            )}
+            <button onClick={() => navigate("/decide")} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim cursor-pointer transition-colors duration-200 hover:border-ivory-dim focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ivory-dim">New Decision</button>
+          </StaggerItem>
+
+          <StaggerItem className="mt-16 text-center">
+            <p className="font-display text-sm text-ivory-dim italic">Sic Mundus Creatus Est.</p>
+            <p className="text-ivory-faint/50 text-xs italic mt-1">Thus your world is created.</p>
+          </StaggerItem>
+        </StaggerGroup>
+      </div>
+    </div>
+  );
+}

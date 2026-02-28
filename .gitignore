@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+*.egg
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AWS
+.aws-sam/
+samconfig.toml
+
+# Kiro
+.kiro/
+
+# Cursor IDE
+.cursor/
+
+# Personal docs, competition notes, internal guides
+sic_mundus_aws_submission.md
+DEV-WORKFLOW.md
+CLOUDFRONT-FIX.md
+DEPLOY-GUIDE.md
+auth-security-checklist.md
+diverge_build_guide_v3.md
+Security-audit-prompt.txt
+AIdeas - Building phase Rules.txt
+Aideas - Competition Idea details.txt
+Aideas competition details.txt
+
+# Build artifacts
+packaged.yaml
+
+# Test/debug output
+response.json
+messages.json
+
+# Logs
+*.log

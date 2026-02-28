@@ -1,0 +1,22 @@
+[
+  {"city": "New York", "index": 100, "rent_1br": 3200},
+  {"city": "San Francisco", "index": 96, "rent_1br": 3000},
+  {"city": "Los Angeles", "index": 76, "rent_1br": 2400},
+  {"city": "Boston", "index": 82, "rent_1br": 2600},
+  {"city": "Seattle", "index": 80, "rent_1br": 2300},
+  {"city": "Washington DC", "index": 79, "rent_1br": 2200},
+  {"city": "Miami", "index": 72, "rent_1br": 2100},
+  {"city": "Chicago", "index": 65, "rent_1br": 1800},
+  {"city": "Denver", "index": 67, "rent_1br": 1750},
+  {"city": "Austin", "index": 62, "rent_1br": 1600},
+  {"city": "Portland", "index": 70, "rent_1br": 1700},
+  {"city": "Atlanta", "index": 58, "rent_1br": 1550},
+  {"city": "Dallas", "index": 55, "rent_1br": 1400},
+  {"city": "Houston", "index": 54, "rent_1br": 1350},
+  {"city": "Phoenix", "index": 56, "rent_1br": 1350},
+  {"city": "Minneapolis", "index": 60, "rent_1br": 1450},
+  {"city": "Nashville", "index": 59, "rent_1br": 1500},
+  {"city": "Raleigh", "index": 53, "rent_1br": 1350},
+  {"city": "Salt Lake City", "index": 57, "rent_1br": 1400},
+  {"city": "Pittsburgh", "index": 48, "rent_1br": 1100}
+]

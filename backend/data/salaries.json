@@ -1,0 +1,22 @@
+[
+  {"title": "Software Engineer", "city": "San Francisco", "median": 165000, "low": 120000, "high": 220000},
+  {"title": "Software Engineer", "city": "New York", "median": 155000, "low": 115000, "high": 200000},
+  {"title": "Software Engineer", "city": "Boston", "median": 145000, "low": 110000, "high": 190000},
+  {"title": "Software Engineer", "city": "Austin", "median": 140000, "low": 105000, "high": 185000},
+  {"title": "Software Engineer", "city": "Seattle", "median": 160000, "low": 120000, "high": 210000},
+  {"title": "Software Engineer", "city": "Denver", "median": 135000, "low": 100000, "high": 175000},
+  {"title": "Software Engineer", "city": "Chicago", "median": 130000, "low": 98000, "high": 170000},
+  {"title": "Software Engineer", "city": "Los Angeles", "median": 150000, "low": 112000, "high": 195000},
+  {"title": "Software Engineer", "city": "Atlanta", "median": 125000, "low": 95000, "high": 165000},
+  {"title": "Software Engineer", "city": "Miami", "median": 120000, "low": 90000, "high": 160000},
+  {"title": "Product Manager", "city": "San Francisco", "median": 175000, "low": 130000, "high": 230000},
+  {"title": "Product Manager", "city": "New York", "median": 165000, "low": 125000, "high": 215000},
+  {"title": "Product Manager", "city": "Boston", "median": 150000, "low": 115000, "high": 195000},
+  {"title": "Product Manager", "city": "Austin", "median": 145000, "low": 110000, "high": 185000},
+  {"title": "Product Manager", "city": "Seattle", "median": 170000, "low": 128000, "high": 220000},
+  {"title": "Data Scientist", "city": "San Francisco", "median": 160000, "low": 118000, "high": 210000},
+  {"title": "Data Scientist", "city": "New York", "median": 150000, "low": 112000, "high": 200000},
+  {"title": "Data Scientist", "city": "Boston", "median": 140000, "low": 105000, "high": 185000},
+  {"title": "Data Scientist", "city": "Austin", "median": 135000, "low": 100000, "high": 175000},
+  {"title": "Data Scientist", "city": "Seattle", "median": 155000, "low": 115000, "high": 205000}
+]
