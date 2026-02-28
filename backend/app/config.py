@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     ses_region: str = "us-east-1"
     checkins_table: str = "diverge-checkins"
 
+    # Bedrock Knowledge Base (for research_insight tool)
+    kb_id: str = ""
+
     model_config = {"env_file": ".env", "env_prefix": "DIVERGE_"}
 
     def get_all_cors_origins(self) -> list[str]:

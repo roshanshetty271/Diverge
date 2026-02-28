@@ -41,6 +41,15 @@ class CheckinRequest(BaseModel):
     user_name: str = Field("", max_length=50)
 
 
+class EmailResultsRequest(BaseModel):
+    """Request to email debate results to the user."""
+    email: str = Field(..., pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
+    path_a: str = Field(..., max_length=200)
+    path_b: str = Field(..., max_length=200)
+    verdict_summary: str = Field("", max_length=2000)
+    resources: list[dict] = []
+
+
 # ── Response schemas ─────────────────────────────────────────────
 
 class PathMetrics(BaseModel):
@@ -70,6 +79,15 @@ class RoundResult(BaseModel):
     status: str = "completed"
 
 
+class Resource(BaseModel):
+    """A curated resource recommendation."""
+    type: str
+    title: str
+    author: str
+    url: Optional[str] = None
+    why: str
+
+
 class DebateResponse(BaseModel):
     """Complete debate response returned to the frontend."""
     debate_id: str
@@ -78,6 +96,7 @@ class DebateResponse(BaseModel):
     metrics: list[Optional[RoundMetrics]]
     completed_rounds: int
     total_rounds: int
+    resources: list[Resource] = []
 
 
 class TemplateResponse(BaseModel):

@@ -4,9 +4,9 @@ import { StaggerGroup, StaggerItem } from "../components/Stagger";
 import LifeTimeline from "../components/LifeTimeline";
 import { useDivergeAuth } from "../hooks/useAuth";
 import { useToast } from "../components/Toast";
-import { saveDebate, scheduleCheckin } from "../utils/api";
+import { saveDebate, scheduleCheckin, emailResults } from "../utils/api";
 import { loadDebateState } from "../utils/debateStorage";
-import type { DebateResponse, DecisionInput } from "../types";
+import type { DebateResponse, DecisionInput, Resource } from "../types";
 
 const RE_BOLD = /\*\*/g;
 const RE_HEADINGS = /^#{1,6}\s+/gm;
@@ -64,6 +64,10 @@ export default function Verdict() {
   const [checkinEmail, setCheckinEmail] = useState("");
   const [checkinSent, setCheckinSent] = useState(false);
   const [checkinSending, setCheckinSending] = useState(false);
+  const [resultsEmail, setResultsEmail] = useState("");
+  const [resultsSent, setResultsSent] = useState(false);
+  const [resultsSending, setResultsSending] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   if (!debate) {
     return (
@@ -135,6 +139,33 @@ export default function Verdict() {
     }
   };
 
+  const resources: Resource[] = (debate.resources || []).slice(0, 3);
+
+  const handleEmailResults = async () => {
+    if (!resultsEmail || resultsSending) return;
+    setResultsSending(true);
+    try {
+      const res = await emailResults({
+        email: resultsEmail,
+        path_a: pathAName,
+        path_b: pathBName,
+        verdict_summary: lean || "",
+        resources: resources.map((r) => ({ type: r.type, title: r.title, author: r.author, url: r.url, why: r.why })),
+      });
+      if (res.status === "sent") {
+        setResultsSent(true);
+      } else if (res.body) {
+        await navigator.clipboard.writeText(res.body);
+        setCopied(true);
+        toast("Email not available \u2014 results copied to clipboard.");
+      }
+    } catch {
+      toast("Couldn\u2019t send results. Try again later.");
+    } finally {
+      setResultsSending(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -197,6 +228,56 @@ export default function Verdict() {
                 <p className="text-ivory text-base leading-[1.75]">{nextMove}</p>
                 <p className="text-ivory-faint text-xs mt-3">Do this in the next 24 hours.</p>
               </div>
+            </StaggerItem>
+          )}
+
+          {resources.length > 0 && (
+            <StaggerItem className="mt-12">
+              <p className="text-ivory-faint text-xs font-mono uppercase tracking-[0.2em] mb-6 text-center">What to explore next</p>
+              <div className="space-y-3">
+                {resources.map((r, i) => {
+                  const accentColor = { book: "border-l-path-safe", video: "border-l-path-risk", article: "border-l-ivory-dim", podcast: "border-l-green-500" }[r.type] || "border-l-ivory-dim";
+                  const typeBadge = { book: "bg-path-safe/10 text-path-safe", video: "bg-path-risk/10 text-path-risk", article: "bg-ivory-dim/10 text-ivory-dim", podcast: "bg-green-500/10 text-green-500" }[r.type] || "bg-ivory-dim/10 text-ivory-dim";
+                  const card = (
+                    <div className={`bg-surface rounded-lg border border-surface-light border-l-4 ${accentColor} p-4`}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="text-ivory text-sm font-medium">{r.title}</p>
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${typeBadge}`}>{r.type}</span>
+                      </div>
+                      <p className="text-ivory-dim text-xs">{r.author}</p>
+                      <p className="text-ivory-faint text-xs mt-1">{r.why}</p>
+                    </div>
+                  );
+                  return r.url ? (
+                    <a key={i} href={r.url} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">{card}</a>
+                  ) : (
+                    <div key={i}>{card}</div>
+                  );
+                })}
+              </div>
+              {resultsSent ? (
+                <p className="text-path-safe text-sm font-mono text-center mt-4">{"\u2713"} Full list sent to your email.</p>
+              ) : copied ? (
+                <p className="text-path-safe text-sm font-mono text-center mt-4">{"\u2713"} Results copied to clipboard.</p>
+              ) : (
+                <div className="flex gap-2 mt-4 max-w-sm mx-auto">
+                  <input
+                    type="email"
+                    value={resultsEmail}
+                    onChange={(e) => setResultsEmail(e.target.value)}
+                    placeholder="Email me the full list"
+                    onKeyDown={(e) => e.key === "Enter" && handleEmailResults()}
+                    className="flex-1 bg-surface border border-surface-light rounded-lg px-4 py-2.5 text-ivory text-sm focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
+                  />
+                  <button
+                    onClick={handleEmailResults}
+                    disabled={!resultsEmail || resultsSending}
+                    className="px-4 py-2.5 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk"
+                  >
+                    {resultsSending ? "Sending\u2026" : "Send"}
+                  </button>
+                </div>
+              )}
             </StaggerItem>
           )}
 

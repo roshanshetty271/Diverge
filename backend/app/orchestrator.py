@@ -26,12 +26,23 @@ from app.agents.metrics import extract_metrics
 from app.schemas import RoundResult, RoundMetrics, DebateResponse
 from app.tools.monte_carlo import monte_carlo_financial
 from app.tools.data_tools import get_salary_data, compare_cost_of_living, calculate_runway
+from app.tools.knowledge import research_insight
 from app.security.llm_security import validate_agent_output, validate_safe_content
 
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 FINANCIAL_TOOLS = [monte_carlo_financial, get_salary_data, compare_cost_of_living, calculate_runway]
+
+TOOL_MAP: dict[str, list] = {
+    "career":       [research_insight, get_salary_data, compare_cost_of_living],
+    "startup":      [research_insight, monte_carlo_financial, calculate_runway],
+    "financial":    [research_insight] + FINANCIAL_TOOLS,
+    "education":    [research_insight, get_salary_data],
+    "relationship": [research_insight],
+    "health":       [research_insight],
+    "general":      [research_insight],
+}
 
 NON_RETRYABLE = ("ValidationException", "AccessDeniedException", "ResourceNotFoundException")
 
@@ -242,6 +253,18 @@ def _generate_verdict(transcript: list[RoundResult], user_ctx: dict) -> str:
     return "The verdict could not be generated. Please review the debate rounds above."
 
 
+def _get_resources(category: str) -> list:
+    """Get curated resources for the given category."""
+    try:
+        from app.data.resources import get_resources_for_category
+        from app.schemas import Resource
+        raw = get_resources_for_category(category)
+        return [Resource(**r) for r in raw[:3]]
+    except Exception as e:
+        logger.warning(f"Failed to load resources for {category}: {e}")
+        return []
+
+
 def run_debate(user_context: dict) -> DebateResponse:
     """Run the complete 5-round debate synchronously.
 
@@ -255,10 +278,11 @@ def run_debate(user_context: dict) -> DebateResponse:
     debate_summary = ""
 
     category = detect_decision_category(user_context["path_a"], user_context["path_b"])
+    user_context["_category"] = category
     brave = detect_brave_path(user_context["path_a"], user_context["path_b"])
     alpha_persona, beta_persona = _assign_personas(brave, user_context)
     rounds = get_rounds(category)
-    tools = FINANCIAL_TOOLS if category == "financial" else []
+    tools = TOOL_MAP.get(category, [research_insight])
 
     logger.info(
         f"Starting debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
@@ -295,6 +319,8 @@ def run_debate(user_context: dict) -> DebateResponse:
     elapsed = time.time() - start_time
     logger.info(f"Debate {debate_id} finished in {elapsed:.1f}s ({len(completed)}/{len(rounds)} rounds, category={category})")
 
+    resources = _get_resources(category)
+
     return DebateResponse(
         debate_id=debate_id,
         transcript=transcript,
@@ -302,6 +328,7 @@ def run_debate(user_context: dict) -> DebateResponse:
         metrics=all_metrics,
         completed_rounds=len(completed),
         total_rounds=len(rounds),
+        resources=resources,
     )
 
 
@@ -318,10 +345,11 @@ def run_debate_streaming(user_context: dict):
     debate_summary = ""
 
     category = detect_decision_category(user_context["path_a"], user_context["path_b"])
+    user_context["_category"] = category
     brave = detect_brave_path(user_context["path_a"], user_context["path_b"])
     alpha_persona, beta_persona = _assign_personas(brave, user_context)
     rounds = get_rounds(category)
-    tools = FINANCIAL_TOOLS if category == "financial" else []
+    tools = TOOL_MAP.get(category, [research_insight])
 
     logger.info(
         f"Starting streaming debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
@@ -354,6 +382,8 @@ def run_debate_streaming(user_context: dict):
     elapsed = time.time() - start_time
     logger.info(f"Streaming debate {debate_id} finished in {elapsed:.1f}s")
 
+    resources = _get_resources(category)
+
     yield {
         "type": "complete",
         "verdict": verdict,
@@ -361,4 +391,5 @@ def run_debate_streaming(user_context: dict):
         "metrics": [m.model_dump() if m else None for m in all_metrics],
         "completed_rounds": len(completed),
         "total_rounds": len(rounds),
+        "resources": [r.model_dump() for r in resources],
     }

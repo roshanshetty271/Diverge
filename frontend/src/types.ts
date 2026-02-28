@@ -24,6 +24,14 @@ export interface RoundResult {
   status: "completed" | "partial";
 }
 
+export interface Resource {
+  type: "book" | "video" | "article" | "podcast";
+  title: string;
+  author: string;
+  url?: string | null;
+  why: string;
+}
+
 export interface DebateResponse {
   debate_id: string;
   transcript: RoundResult[];
@@ -31,6 +39,7 @@ export interface DebateResponse {
   metrics: (RoundMetrics | null)[];
   completed_rounds: number;
   total_rounds: number;
+  resources?: Resource[];
 }
 
 export interface DecisionInput {

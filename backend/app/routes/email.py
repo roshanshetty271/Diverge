@@ -1,13 +1,13 @@
-"""Email routes — check-in reminders via AWS SES.
+"""Email routes — check-in reminders and results emails via AWS SES.
 
 Sends follow-up emails at Day 7, 30, and 90 after a debate.
-For the competition demo, emails are sent immediately with staggered subject lines.
+Also supports emailing debate results + resource recommendations.
 Falls back gracefully when SES is not configured.
 """
 
 import logging
 from fastapi import APIRouter, HTTPException
-from app.schemas import CheckinRequest
+from app.schemas import CheckinRequest, EmailResultsRequest
 from app.config import get_settings
 
 logger = logging.getLogger("diverge.routes.email")
@@ -134,3 +134,64 @@ def schedule_checkin(req: CheckinRequest):
         }
 
     raise HTTPException(status_code=500, detail="Failed to schedule check-in emails.")
+
+
+def _build_results_email(req: EmailResultsRequest) -> str:
+    """Build a plain-text results email with verdict and resources."""
+    lines = [
+        f"Your Diverge Decision: \"{req.path_a}\" vs \"{req.path_b}\"",
+        "=" * 50,
+        "",
+    ]
+
+    if req.verdict_summary:
+        lines.append("THE VERDICT")
+        lines.append("-" * 30)
+        lines.append(req.verdict_summary)
+        lines.append("")
+
+    if req.resources:
+        lines.append("WHAT TO EXPLORE NEXT")
+        lines.append("-" * 30)
+        for r in req.resources:
+            r_type = r.get("type", "").upper()
+            title = r.get("title", "")
+            author = r.get("author", "")
+            why = r.get("why", "")
+            url = r.get("url", "")
+            lines.append(f"[{r_type}] {title} — {author}")
+            if why:
+                lines.append(f"  {why}")
+            if url:
+                lines.append(f"  {url}")
+            lines.append("")
+
+    lines.extend([
+        "---",
+        "Sic Mundus Creatus Est.",
+        "Thus your world is created.",
+        "",
+        "— Diverge",
+    ])
+
+    return "\n".join(lines)
+
+
+@router.post("/email-results")
+def send_results_email(req: EmailResultsRequest):
+    """Email debate results and resource recommendations to the user.
+
+    Falls back to returning structured content for clipboard copy if SES unavailable.
+    """
+    body = _build_results_email(req)
+    subject = f"Your Diverge Decision: {req.path_a} vs {req.path_b}"
+
+    ok = _send_ses_email(req.email, subject, body)
+    if ok:
+        return {"status": "sent", "message": f"Results sent to {req.email}"}
+
+    return {
+        "status": "fallback",
+        "message": "Email service not available. Copy your results below.",
+        "body": body,
+    }

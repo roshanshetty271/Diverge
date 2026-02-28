@@ -4,6 +4,18 @@ Best practice: keep prompts separate from agent logic.
 Makes it easy to iterate on prompts without changing code.
 """
 
+ROUND2_CAREER = {
+    "name": "The Ledger", "title": "Year 2-3: The Career Reality",
+    "timeline": "year 2-3",
+    "focus": "It's been 2-3 years. The honeymoon is over. What does your resume look like? Are you growing or plateauing? Describe ONE specific moment — a meeting, a conversation, a project — that captures whether this career path is actually delivering. Then challenge the other version's career story: what skills are they NOT building? What doors quietly closed?",
+}
+
+ROUND2_STARTUP = {
+    "name": "The Burn", "title": "Year 2-3: The Startup Reality",
+    "timeline": "year 2-3",
+    "focus": "It's been 2-3 years. What does your bank account look like? Did you find product-market fit or are you still pivoting? Describe ONE specific moment that captures the financial and emotional reality of this path. Then challenge the other version: what are they NOT telling you about their runway, their relationships, or their sleep?",
+}
+
 ROUND2_FINANCIAL = {
     "name": "The Ledger", "title": "Year 2-3: The Money Reality",
     "timeline": "year 2-3",
@@ -14,6 +26,18 @@ ROUND2_RELATIONSHIP = {
     "name": "The Mirror", "title": "Year 2-3: The Emotional Reality",
     "timeline": "year 2-3",
     "focus": "It's been 2-3 years. The initial rush is gone. What's the emotional truth now? Describe ONE specific moment from your week that captures how this path actually feels. Then challenge the other version — what are they NOT telling you about how they really feel?",
+}
+
+ROUND2_HEALTH = {
+    "name": "The Mirror", "title": "Year 2-3: The Body Check",
+    "timeline": "year 2-3",
+    "focus": "It's been 2-3 years. How does daily life physically feel? Describe ONE specific moment — waking up, looking in the mirror, climbing stairs, fitting into old clothes — that captures what this path did to your body and mind. Then challenge the other version: what are they NOT telling you about the habits they broke or never built?",
+}
+
+ROUND2_EDUCATION = {
+    "name": "The Investment", "title": "Year 2-3: The Learning Curve",
+    "timeline": "year 2-3",
+    "focus": "It's been 2-3 years. Was the investment worth it? Describe ONE specific moment — a class, a debt statement, a job interview, a realization — that captures the reality of this path. What doors opened? What doors closed because of the time and money spent? Then challenge the other version: what opportunity cost are they ignoring?",
 }
 
 ROUND2_GENERAL = {
@@ -38,11 +62,30 @@ ROUNDS_BASE = [
      "focus": "Last chance. In under 80 words: what's the one thing they NEED to understand about this path that they can't see from where they're standing right now? Be direct. Be personal. Make it land. If you mention the deathbed, name a SPECIFIC face, place, or moment — not a concept. 'I never told Sarah' hits harder than 'I never pursued authenticity.'"},
 ]
 
+STARTUP_KEYWORDS = frozenset([
+    "startup", "business", "company", "launch", "found", "entrepreneur",
+    "venture", "bootstrap", "co-founder", "cofounder", "mvp", "product",
+])
+
+CAREER_KEYWORDS = frozenset([
+    "job", "career", "offer", "position", "promotion", "quit", "resign",
+    "employed", "freelance", "remote", "manager", "role",
+])
+
 FINANCIAL_KEYWORDS = frozenset([
-    "job", "career", "salary", "pay", "work", "offer", "startup", "company",
-    "business", "position", "promotion", "quit", "resign", "employed", "freelance",
-    "move", "relocate", "city", "school", "study", "degree", "mba", "tuition",
-    "rent", "retire", "income", "save", "invest",
+    "salary", "pay", "income", "save", "invest", "rent", "retire",
+    "move", "relocate", "city",
+])
+
+HEALTH_KEYWORDS = frozenset([
+    "exercise", "gym", "diet", "weight", "smoking", "sober", "therapy",
+    "medication", "fitness", "health", "mental", "anxiety", "depression",
+    "workout", "run", "running",
+])
+
+EDUCATION_KEYWORDS = frozenset([
+    "study", "degree", "school", "mba", "tuition", "college", "university",
+    "masters", "phd", "program", "graduate", "bachelors",
 ])
 
 RELATIONSHIP_KEYWORDS = frozenset([
@@ -65,12 +108,25 @@ AVOIDANCE_KEYWORDS = frozenset([
 
 
 def detect_decision_category(path_a: str, path_b: str) -> str:
-    """Detect decision category from path text. Returns 'financial', 'relationship', or 'general'."""
+    """Detect decision category from path text.
+
+    Returns one of: 'startup', 'career', 'education', 'financial',
+    'relationship', 'health', or 'general'.
+    Order matters: startup before career (subset), education before financial (overlap).
+    """
     combined = f"{path_a} {path_b}".lower()
     words = set(combined.split())
 
+    if words & STARTUP_KEYWORDS:
+        return "startup"
+    if words & EDUCATION_KEYWORDS:
+        return "education"
+    if words & CAREER_KEYWORDS:
+        return "career"
     if words & FINANCIAL_KEYWORDS:
         return "financial"
+    if words & HEALTH_KEYWORDS:
+        return "health"
     if words & RELATIONSHIP_KEYWORDS:
         return "relationship"
 
@@ -107,8 +163,12 @@ def detect_brave_path(path_a: str, path_b: str) -> str:
 def get_rounds(category: str) -> list[dict]:
     """Return the 5 debate rounds with Round 2 adapted to the decision category."""
     round2 = {
+        "career": ROUND2_CAREER,
+        "startup": ROUND2_STARTUP,
         "financial": ROUND2_FINANCIAL,
         "relationship": ROUND2_RELATIONSHIP,
+        "health": ROUND2_HEALTH,
+        "education": ROUND2_EDUCATION,
     }.get(category, ROUND2_GENERAL)
 
     rounds = list(ROUNDS_BASE)
@@ -148,6 +208,44 @@ PERSONA_EQUAL = {
 }
 
 
+DOMAIN_EXPERTISE: dict[str, str] = {
+    "startup": (
+        "90% of startups fail. The #1 reason is lack of product-market fit (42%), not money (16%). "
+        "First-time founders have an 18% success rate. Median founder salary in year 1-2 is $0-$50K. "
+        "Use these facts to ground your arguments — don't romanticize or catastrophize."
+    ),
+    "career": (
+        "67% of career changers report better satisfaction, but only 13% who want to switch actually follow through. "
+        "It takes 1-2 years to execute a career move. Average salary increase for switchers: 5.2% year one. "
+        "The 'identity gap' (being a beginner again) peaks at months 3-6 and kills most transitions."
+    ),
+    "financial": (
+        "The average American has $8,000 in savings. Financial stress is the #1 cause of relationship problems. "
+        "Relocating costs $5-10K minimum. Income changes take 12-18 months to stabilize after a major financial decision."
+    ),
+    "relationship": (
+        "60% of adults have insecure attachment. Anxious attachment correlates with 45% more breakups. "
+        "Rejection activates the same brain regions as physical pain, but 78% of people who confess feelings "
+        "and get rejected report being glad they did at the 1-year mark. Romantic inaction is the #1 life regret."
+    ),
+    "health": (
+        "Habit formation takes 66 days on average (range 18-254), not 21 days. Missing one day doesn't reset progress. "
+        "Only 46.6% maintain dietary changes at 4 years. 150 min/week of exercise reduces depression by 26-30%. "
+        "The #1 predictor of exercise adherence is enjoyment, not willpower."
+    ),
+    "education": (
+        "Bachelor's holders earn 70% more lifetime ($78K vs $49K/yr). STEM median is $98K. "
+        "Average student debt: $37,800 for bachelor's, $71K for master's. ROI varies dramatically: "
+        "engineering pays back in 5-7 years, humanities may take 15-20 years. 37% don't complete their degree."
+    ),
+    "general": (
+        "People regret inaction far more than action over time (Gilovich & Medvec, replicated 2022, n=988). "
+        "Decision paralysis is driven by intolerance of uncertainty, not lack of information. "
+        "Most decisions are more reversible than they feel in the moment."
+    ),
+}
+
+
 def _build_prompt(user_context: dict, round_info: dict, path_key: str, persona: dict) -> str:
     """Build system prompt for an agent with the given persona."""
     samples = user_context.get("writing_samples") or "No samples provided."
@@ -156,6 +254,9 @@ def _build_prompt(user_context: dict, round_info: dict, path_key: str, persona: 
     other_key = "path_b" if path_key == "path_a" else "path_a"
     other_path = user_context[other_key]
     timeline = round_info.get("timeline", "")
+
+    category = user_context.get("_category", "general")
+    domain_context = DOMAIN_EXPERTISE.get(category, DOMAIN_EXPERTISE["general"])
 
     age = user_context.get("age")
     name_line = f'- Address them as "{name}" sometimes.\n' if name else ""
@@ -206,6 +307,9 @@ SAFETY:
 - Never give specific legal advice.
 - You can discuss emotional difficulty, financial hardship, and regret honestly — that's your job.
 - If the decision topic feels like it involves someone in crisis, focus on practical consequences, not emotional extremes.
+
+DOMAIN CONTEXT (use these facts to ground your arguments):
+{domain_context}
 
 BEFORE WRITING (think silently, never output this):
 1. What is ONE specific moment from {timeline} on "{path}" that proves it's worth it?

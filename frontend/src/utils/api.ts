@@ -93,3 +93,18 @@ export async function scheduleCheckin(payload: CheckinPayload): Promise<{ status
     body: JSON.stringify(payload),
   });
 }
+
+export interface EmailResultsPayload {
+  email: string;
+  path_a: string;
+  path_b: string;
+  verdict_summary: string;
+  resources: { type: string; title: string; author: string; url?: string | null; why: string }[];
+}
+
+export async function emailResults(payload: EmailResultsPayload): Promise<{ status: string; message: string; body?: string }> {
+  return apiFetch<{ status: string; message: string; body?: string }>(`${API_BASE}/api/email-results`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
