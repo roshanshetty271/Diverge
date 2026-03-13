@@ -86,3 +86,26 @@ input[type="number"] {
 .bg-atmosphere {
   background: radial-gradient(ellipse at center, #111 0%, #0a0a0a 70%);
 }
+
+/* ── Landing page ──────────────────────────────────────── */
+.glow-amber {
+  text-shadow: 0 0 15px rgba(212, 168, 67, 0.4);
+}
+.glow-blue {
+  text-shadow: 0 0 15px rgba(74, 111, 165, 0.4);
+}
+.border-gradient {
+  border: 1px solid transparent;
+  border-image: linear-gradient(to bottom, #d4a843, #4a6fa5) 1;
+}
+.timeline-rift {
+  background: linear-gradient(180deg, transparent 0%, #d4a843 50%, transparent 100%);
+  width: 1px;
+}
+@keyframes pulse-slow {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.7; }
+}
+.animate-pulse-slow {
+  animation: pulse-slow 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
