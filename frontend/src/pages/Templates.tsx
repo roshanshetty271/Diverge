@@ -26,7 +26,7 @@ export default function Templates() {
   };
 
   return (
-    <div className="bg-void min-h-screen pt-16 pb-10 overflow-x-hidden flex flex-col">
+    <div className="bg-void min-h-screen pt-24 pb-10 overflow-x-hidden flex flex-col">
       <main className="flex-1 max-w-5xl mx-auto px-6 w-full">
         {/* Header Section */}
         <div className="mb-10">
@@ -41,20 +41,46 @@ export default function Templates() {
           </p>
         </div>
 
+        {/* Custom Path - Prominent Top Option */}
+        <div 
+          onClick={() => handleSelect("custom")}
+          className="group mb-8 p-6 border border-path-safe/30 hover:border-path-safe bg-surface/30 hover:bg-surface/50 transition-all duration-300 cursor-pointer flex items-center justify-between"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-full border border-path-safe/50 group-hover:border-path-safe flex items-center justify-center group-hover:bg-path-safe/10 transition-all duration-300">
+              <span className="text-2xl font-display text-path-safe">+</span>
+            </div>
+            <div>
+              <h3 className="font-display text-xl font-bold tracking-[0.1em] group-hover:text-path-safe transition-colors">Custom Path</h3>
+              <p className="text-gray-400 text-sm">Define your own divergence — start from scratch</p>
+            </div>
+          </div>
+          <svg className="w-6 h-6 text-path-safe opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
+
+        {/* Divider */}
+        <div className="flex items-center gap-4 mb-8">
+          <div className="flex-1 h-px bg-white/10" />
+          <p className="text-gray-500 text-xs uppercase tracking-widest">Or choose a template</p>
+          <div className="flex-1 h-px bg-white/10" />
+        </div>
+
         {/* 3-Column Grid of Atmospheric Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-16">
           {TEMPLATES.map((t) => (
             <div
               key={t.id}
               onClick={() => handleSelect(t)}
-              className="group relative aspect-[4/5] overflow-hidden border border-white/10 bg-void hover:border-path-risk transition-all duration-500 cursor-pointer active:scale-95"
+              className="group relative aspect-[4/5] overflow-hidden border border-white/20 bg-void hover:border-path-risk transition-all duration-500 cursor-pointer active:scale-95"
             >
               {/* Background with overlay */}
               <div 
-                className="absolute inset-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105 opacity-25 group-hover:opacity-40"
+                className="absolute inset-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105 opacity-60 group-hover:opacity-75 brightness-150 group-hover:brightness-200"
                 style={{ backgroundImage: `url('${getImageUrl(t.id)}')` }}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-void via-void/30 to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-t from-void/70 via-void/30 to-transparent" />
               
               <div className="absolute inset-0 p-5 flex flex-col justify-end">
                 <span className="text-path-risk text-[9px] font-display tracking-[0.3em] uppercase mb-2 opacity-50">
@@ -70,23 +96,6 @@ export default function Templates() {
               <div className="absolute inset-x-0 bottom-0 h-0.5 bg-path-risk transform scale-x-0 group-hover:scale-x-100 transition-transform origin-left duration-500" />
             </div>
           ))}
-
-          {/* Custom Path Card */}
-          <div
-            onClick={() => handleSelect("custom")}
-            className="group relative aspect-[4/5] overflow-hidden border border-white/10 bg-void hover:border-path-safe transition-all duration-500 cursor-pointer flex flex-col items-center justify-center active:scale-95"
-          >
-            <div className="relative z-10 text-center p-5">
-              <div className="w-10 h-10 rounded-full border border-white/10 flex items-center justify-center mb-4 group-hover:border-path-safe group-hover:bg-path-safe/10 transition-all duration-500">
-                <span className="text-lg font-display text-path-safe">+</span>
-              </div>
-              <h3 className="font-display text-lg font-bold mb-2 tracking-[0.1em] group-hover:text-path-safe transition-colors">Custom Path</h3>
-              <p className="text-gray-500 text-[10px] italic">Define your own divergence.</p>
-            </div>
-            
-             {/* Hover highlight border */}
-             <div className="absolute inset-x-0 bottom-0 h-0.5 bg-path-safe transform scale-x-0 group-hover:scale-x-100 transition-transform origin-left duration-500" />
-          </div>
         </div>
       </main>
 

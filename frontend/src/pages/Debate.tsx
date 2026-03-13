@@ -162,7 +162,7 @@ export default function Debate() {
   const canGoVerdict = safeRound >= transcript.length && verdictReady;
 
   return (
-    <div className="min-h-screen bg-void px-4 py-8 md:px-8">
+    <div className="min-h-screen bg-void px-4 pt-24 pb-8 md:px-8">
       <div className="max-w-4xl mx-auto">
 
         <p className="text-center text-ivory-faint text-xs font-mono uppercase tracking-widest mb-1">{heading}</p>

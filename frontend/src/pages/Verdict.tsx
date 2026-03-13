@@ -62,7 +62,7 @@ export default function Verdict() {
   const stored = !locationState.debate ? loadDebateState() : null;
   const debate = locationState.debate || stored?.debate;
   const input = locationState.input || stored?.input;
-  const { isAuthenticated, token, userId, login } = useDivergeAuth();
+  const { isAuthenticated, token, login } = useDivergeAuth();
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -179,7 +179,7 @@ export default function Verdict() {
     if (sharing || shareUrl) return;
     setSharing(true);
     try {
-      const res = await shareDebate(debate as Record<string, unknown>, (input || {}) as Record<string, unknown>);
+      const res = await shareDebate(debate as unknown as Record<string, unknown>, (input || {}) as Record<string, unknown>);
       const fullUrl = `${window.location.origin}${res.url}`;
       setShareUrl(fullUrl);
       await navigator.clipboard.writeText(fullUrl);

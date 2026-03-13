@@ -18,18 +18,12 @@ export default function Landing() {
           <p className="text-lg md:text-xl text-gray-400 font-light mb-10 max-w-2xl mx-auto leading-relaxed">
             Career pivot or stay put? New city or familiar ground? Your mind is a maze of &ldquo;what ifs.&rdquo; We are the exit.
           </p>
-          <div className="flex flex-col md:flex-row items-center justify-center gap-4">
+          <div className="flex items-center justify-center">
             <button
               className="w-full md:w-auto px-8 py-3 bg-path-risk text-void font-bold uppercase tracking-widest hover:bg-white transition-all cursor-pointer text-sm"
               onClick={goDecide}
             >
               Step Into The Rift
-            </button>
-            <button
-              className="w-full md:w-auto px-8 py-3 border border-path-safe text-path-safe font-bold uppercase tracking-widest hover:bg-path-safe hover:text-white transition-all cursor-pointer text-sm"
-              onClick={goDecide}
-            >
-              Observe The Simulation
             </button>
           </div>
         </div>

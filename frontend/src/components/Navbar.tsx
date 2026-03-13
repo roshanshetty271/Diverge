@@ -11,12 +11,12 @@ export default function Navbar() {
         <Link to="/" className="text-path-risk font-display text-lg font-bold tracking-widest hover:brightness-110 transition-all">
           DIVERGE
         </Link>
-        <div className="hidden md:flex items-center space-x-6">
-          <Link to="/decide" className="text-[10px] uppercase tracking-widest text-gray-400 hover:text-path-risk transition-colors">Decide</Link>
+        <div className="hidden md:flex items-center space-x-8">
+          <Link to="/decide" className="text-xs uppercase tracking-widest text-gray-400 hover:text-path-risk transition-colors">Decide</Link>
           {isCognitoConfigured() && (
-            <Link to="/journal" className="text-[10px] uppercase tracking-widest text-gray-400 hover:text-path-risk transition-colors">Journal</Link>
+            <Link to="/journal" className="text-xs uppercase tracking-widest text-gray-400 hover:text-path-risk transition-colors">Journal</Link>
           )}
-          <Link to="/crisis" className="text-[9px] uppercase tracking-widest text-gray-500 hover:text-ivory transition-colors">Crisis Resources</Link>
+          <Link to="/crisis" className="text-xs uppercase tracking-widest text-gray-400 hover:text-path-risk transition-colors">Crisis Resources</Link>
         </div>
         <button
           className="px-4 py-1.5 border border-path-risk text-path-risk text-[10px] uppercase tracking-widest hover:bg-path-risk hover:text-void transition-all duration-500 cursor-pointer"

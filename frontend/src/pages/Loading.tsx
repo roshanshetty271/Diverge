@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import DarkQuote from "../components/DarkQuote";
-import ForkPath from "../components/ForkPath";
+import AnimatedForkPath from "../components/AnimatedForkPath";
+import StatusUpdater from "../components/StatusUpdater";
+import RoundCounter from "../components/RoundCounter";
+import FactRotator from "../components/FactRotator";
+import CancelButton from "../components/CancelButton";
 import { startDebateStream, subscribeDebate, getDebateStream, resetDebateStream } from "../utils/debateStream";
-import { ROUNDS } from "../utils/constants";
+import { calculateProgress } from "../utils/loadingHelpers";
 import type { DecisionInput } from "../types";
 
 export default function Loading() {
@@ -12,9 +15,16 @@ export default function Loading() {
   const navigate = useNavigate();
   const payload = location.state as DecisionInput | null;
   const [roundCount, setRoundCount] = useState(0);
+  const [streamingRound, setStreamingRound] = useState(0);
+  const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasFired = useRef(false);
   const hasNavigated = useRef(false);
+
+  const handleCancel = () => {
+    resetDebateStream();
+    navigate("/decide", { replace: true });
+  };
 
   useEffect(() => {
     if (!payload) { navigate("/decide", { replace: true }); return; }
@@ -28,6 +38,8 @@ export default function Loading() {
     const unsub = subscribeDebate(() => {
       const s = getDebateStream();
       setRoundCount(s.rounds.length);
+      setStreamingRound(s.streamingRound || 0);
+      setDone(s.done || false);
 
       if (s.error && !hasNavigated.current) {
         if (s.error === "__crisis__") {
@@ -65,25 +77,75 @@ export default function Loading() {
     );
   }
 
-  const roundLabel = roundCount > 0
-    ? `Round ${roundCount} ready`
-    : `Preparing ${ROUNDS[0]?.name || "Round 1"}\u2026`;
+  const progress = calculateProgress(roundCount, 5);
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-6 relative bg-atmosphere">
-      <div className="relative z-10 text-center max-w-md">
-        <motion.p initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8 }} className="font-display text-xl text-ivory leading-relaxed" style={{ fontWeight: 400 }}>
-          {payload?.user_name ? `${payload.user_name}, two` : "Two"} versions of your future self are preparing their case.
-        </motion.p>
-        <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5, duration: 0.6 }} className="text-ivory-dim text-sm mt-3">
-          {roundCount > 0 ? "Almost there\u2026" : "This takes about a minute."}
-        </motion.p>
-        <div className="mt-14"><DarkQuote intervalMs={5000} /></div>
-        <div className="mt-14 flex flex-col items-center">
-          <ForkPath variant="loading" progress={Math.max(roundCount / 5, 0.05)} />
-          <p className="text-ivory-faint text-xs font-mono mt-4">{roundLabel}</p>
-        </div>
+    <div className="min-h-screen flex flex-col items-center justify-center px-6 relative overflow-hidden" style={{ backgroundColor: "#0a0a0a" }}>
+      {/* Ambient Background Effects */}
+      <div className="fixed inset-0 z-0">
+        {/* Film grain overlay */}
+        <div 
+          className="absolute inset-0 opacity-[0.05] pointer-events-none"
+          style={{
+            backgroundImage: "url('data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E')",
+            backgroundRepeat: "repeat",
+          }}
+        />
+        {/* Gradient overlay */}
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-void-black to-void-black"></div>
+        {/* Subtle radial glow */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-diverge-blue/5 rounded-full blur-[120px]"></div>
       </div>
+
+      {/* Main Content */}
+      <main className="relative z-10 w-full max-w-2xl flex flex-col items-center text-center">
+        {/* Animated Fork Path with Round Counter */}
+        <div className="mb-12 relative h-48 w-64">
+          <AnimatedForkPath progress={progress} />
+          {/* Round Counter positioned below fork */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 mt-16">
+            <RoundCounter current={roundCount} total={5} />
+          </div>
+        </div>
+
+        {/* Narrative Text */}
+        <div className="space-y-6">
+          <motion.h1 
+            initial={{ opacity: 0, y: 8 }} 
+            animate={{ opacity: 1, y: 0 }} 
+            transition={{ duration: 0.8 }}
+            className="font-serif text-2xl md:text-3xl text-white tracking-wide leading-relaxed"
+          >
+            <span className="text-amber-gold">{payload?.user_name || "Alex"}</span>, two versions of your future self are preparing their case.
+          </motion.h1>
+          
+          <motion.p 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            transition={{ delay: 0.5, duration: 0.6 }}
+            className="text-white/60 text-sm md:text-base max-w-md mx-auto leading-relaxed italic"
+          >
+            This takes about a minute.
+          </motion.p>
+
+          {/* Status Updates */}
+          <div className="h-8 overflow-hidden">
+            <StatusUpdater 
+              roundCount={roundCount} 
+              streamingRound={streamingRound} 
+              done={done} 
+            />
+          </div>
+        </div>
+
+        {/* Rotating Facts */}
+        <FactRotator intervalMs={6000} />
+      </main>
+
+      {/* Cancel Button */}
+      <footer className="fixed bottom-8 w-full px-8 flex justify-end z-20">
+        <CancelButton onCancel={handleCancel} />
+      </footer>
     </div>
   );
 }
