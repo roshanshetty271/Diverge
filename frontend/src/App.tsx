@@ -28,7 +28,7 @@ function PageFallback() {
   );
 }
 
-const HIDE_NAVBAR_PATHS = ["/", "/loading", "/crisis"];
+const HIDE_NAVBAR_PATHS = ["/loading", "/crisis"];
 
 export default function App() {
   const location = useLocation();

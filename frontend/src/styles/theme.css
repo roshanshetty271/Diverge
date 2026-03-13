@@ -8,8 +8,6 @@
   --color-path-safe-dim: #2a3f5f;
   --color-path-risk: #d4a843;
   --color-path-risk-dim: #7a6228;
-  --color-ivory: #f0ece2;
-  --color-ivory-dim: #a09a8e;
   --color-ivory-faint: #706b62;
 
   --font-display: "Cinzel", serif;
@@ -49,6 +47,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 input[type="number"] {
   -moz-appearance: textfield;
+  appearance: textfield;
 }
 
 /* Custom scrollbar for dark theme */
