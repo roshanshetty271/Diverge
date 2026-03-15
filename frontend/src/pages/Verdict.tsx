@@ -19,6 +19,46 @@ const RE_POINT_PREFIX = /^\*?\*?[-•*]\s*/;
 const RE_POINT_NUMBER = /^\d+[.)]\s*/;
 const RE_LEADING_SEPARATOR = /^[:\s*]+/;
 
+// Material Icon component for consistent iconography
+const MaterialIcon = ({ name, className = "" }: { name: string; className?: string }) => (
+  <span className={`material-icons ${className}`} aria-hidden="true">
+    {name}
+  </span>
+);
+
+// Resource type configuration for icons, colors, and styling
+const RESOURCE_CONFIG: Record<string, {
+  icon: string;
+  iconColor: string;
+  borderColor: string;
+  badgeClass: string;
+}> = {
+  book: {
+    icon: 'book',
+    iconColor: 'text-path-safe',
+    borderColor: 'border-path-safe/30',
+    badgeClass: 'bg-path-safe/10 text-path-safe'
+  },
+  video: {
+    icon: 'play_circle',
+    iconColor: 'text-path-risk',
+    borderColor: 'border-path-risk/30',
+    badgeClass: 'bg-path-risk/10 text-path-risk'
+  },
+  article: {
+    icon: 'article',
+    iconColor: 'text-ivory-dim',
+    borderColor: 'border-ivory-dim/30',
+    badgeClass: 'bg-ivory-dim/10 text-ivory-dim'
+  },
+  podcast: {
+    icon: 'mic',
+    iconColor: 'text-green-500',
+    borderColor: 'border-green-500/30',
+    badgeClass: 'bg-green-500/10 text-green-500'
+  }
+};
+
 function stripMarkdown(text: string): string {
   return text
     .replace(RE_BOLD, "")
@@ -77,6 +117,7 @@ export default function Verdict() {
   const [sharing, setSharing] = useState(false);
   const [chosenPath, setChosenPath] = useState<string | null>(null);
   const [choosingPath, setChoosingPath] = useState(false);
+  const [blindSpotRevealed, setBlindSpotRevealed] = useState(false);
 
   if (!debate) {
     return (
@@ -223,78 +264,211 @@ export default function Verdict() {
     <div className="min-h-screen bg-void px-6 py-16">
       <div className="max-w-5xl mx-auto">
         <StaggerGroup>
-          <StaggerItem className="text-center">
-            <div className="w-16 h-px bg-path-risk mx-auto" />
-            <p className="text-ivory-faint text-xs font-mono uppercase tracking-[0.25em] mt-4">The Verdict</p>
+          {/* Dramatic Header Section */}
+          <StaggerItem className="text-center mb-12">
+            <h1 className="font-display text-4xl md:text-5xl font-bold text-ivory uppercase tracking-[0.15em] mb-2">
+              THE VERDICT
+            </h1>
+            <p className="text-ivory-dim text-sm md:text-base italic tracking-wide">
+              A cinematic revelation of your divergence
+            </p>
           </StaggerItem>
 
+          {/* Comparison Cards - Path Wins */}
           {hasStructuredData && (
-            <StaggerItem className="mt-12 grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="border-l-2 border-path-safe pl-5 py-2">
-                <p className="text-path-safe text-sm font-medium mb-3">Where {pathAName} wins</p>
-                <div className="space-y-2">{winsA.length > 0 ? winsA.map((p, i) => <p key={i} className="text-ivory text-sm leading-relaxed"><span className="text-path-safe mr-2">·</span>{p}</p>) : <p className="text-ivory-dim text-sm italic">See full verdict below</p>}</div>
+            <StaggerItem className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Path A Wins Card */}
+              <div className="bg-surface rounded-lg border-2 border-path-safe/30 p-5 hover:border-path-safe/50 transition-colors">
+                <div className="flex items-center gap-3 mb-3">
+                  <MaterialIcon name="shield" className="text-path-safe text-2xl" />
+                  <h3 className="text-path-safe text-base font-semibold">
+                    Where {pathAName} Wins
+                  </h3>
+                </div>
+                <ul className="space-y-2">
+                  {winsA.length > 0 ? (
+                    winsA.map((point, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="text-path-safe mt-1">•</span>
+                        <span className="text-ivory text-sm leading-relaxed">{point}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <p className="text-ivory-dim text-sm italic">See full verdict below</p>
+                  )}
+                </ul>
               </div>
-              <div className="border-l-2 border-path-risk pl-5 py-2">
-                <p className="text-path-risk text-sm font-medium mb-3">Where {pathBName} wins</p>
-                <div className="space-y-2">{winsB.length > 0 ? winsB.map((p, i) => <p key={i} className="text-ivory text-sm leading-relaxed"><span className="text-path-risk mr-2">·</span>{p}</p>) : <p className="text-ivory-dim text-sm italic">See full verdict below</p>}</div>
+
+              {/* Path B Wins Card */}
+              <div className="bg-surface rounded-lg border-2 border-path-risk/30 p-5 hover:border-path-risk/50 transition-colors">
+                <div className="flex items-center gap-3 mb-3">
+                  <MaterialIcon name="bolt" className="text-path-risk text-2xl" />
+                  <h3 className="text-path-risk text-base font-semibold">
+                    Where {pathBName} Wins
+                  </h3>
+                </div>
+                <ul className="space-y-2">
+                  {winsB.length > 0 ? (
+                    winsB.map((point, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="text-path-risk mt-1">•</span>
+                        <span className="text-ivory text-sm leading-relaxed">{point}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <p className="text-ivory-dim text-sm italic">See full verdict below</p>
+                  )}
+                </ul>
               </div>
             </StaggerItem>
           )}
 
-          <StaggerItem className="mt-12">
-            <div className="bg-surface rounded-lg border border-surface-light border-l-4 border-l-path-risk p-6">
-              <p className="text-path-risk text-sm font-medium mb-3">The thing you might not be seeing</p>
-              <p className="text-ivory text-base leading-[1.75]">{blindSpot || stripMarkdown(verdictText) || "The verdict is being prepared\u2026"}</p>
+          {/* Blind Spot Callout Section */}
+          <StaggerItem className="mt-10">
+            <div className="bg-surface rounded-lg border border-surface-light border-l-4 border-l-path-risk p-6 relative">
+              {/* Background decorative icon */}
+              <MaterialIcon 
+                name="visibility_off" 
+                className="absolute right-6 top-6 text-path-risk/10 text-[100px] pointer-events-none overflow-hidden"
+              />
+              
+              <div className="relative z-10">
+                <p className="text-path-risk text-[10px] font-mono uppercase tracking-[0.3em] mb-2">
+                  Critical Insight
+                </p>
+                <h2 className="font-display text-2xl md:text-3xl font-bold text-ivory uppercase tracking-wide mb-4">
+                  THE BLIND SPOT
+                </h2>
+                
+                {!blindSpotRevealed ? (
+                  <>
+                    <p className="text-ivory-dim text-sm md:text-base leading-relaxed mb-4 italic">
+                      There's something you're not seeing. Are you ready to face it?
+                    </p>
+                    <button 
+                      onClick={() => setBlindSpotRevealed(true)}
+                      className="px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider bg-path-risk text-void hover:bg-path-risk/90 transition-all duration-200 flex items-center gap-2"
+                    >
+                      Confront Truth
+                      <span className="text-base">→</span>
+                    </button>
+                  </>
+                ) : (
+                  <p className="text-ivory text-sm md:text-base leading-relaxed">
+                    {blindSpot || stripMarkdown(verdictText) || "The verdict is being prepared…"}
+                  </p>
+                )}
+              </div>
             </div>
           </StaggerItem>
 
+          {/* Timeline Section - Projection Matrix */}
           {hasTimeline && (
             <StaggerItem className="mt-12">
-              <p className="text-ivory-faint text-xs font-mono uppercase tracking-[0.2em] mb-1 text-center">Where each path takes you</p>
-              <p className="text-ivory-faint/60 text-xs text-center mb-4">Tap a glowing node to reveal its future</p>
+              <div className="text-center mb-6">
+                <h2 className="text-ivory-faint text-xs font-mono uppercase tracking-[0.25em] mb-2">
+                  Projection Matrix
+                </h2>
+                <p className="text-ivory-dim text-sm">
+                  Tap a glowing node to reveal its future
+                </p>
+              </div>
+              
+              {/* Existing ForkTimeline component - NO CHANGES */}
               <ForkTimeline pathAName={pathAName} pathBName={pathBName} snapshotA={snapshotA} snapshotB={snapshotB} />
-              <div className="mt-6">
+              
+              <div className="mt-8">
+                {/* Existing LifeTimeline component - NO CHANGES */}
                 <LifeTimeline pathAName={pathAName} pathBName={pathBName} snapshotA={snapshotA} snapshotB={snapshotB} />
               </div>
             </StaggerItem>
           )}
 
+          {/* Final Lean Section */}
           {lean && (
-            <StaggerItem className="mt-10">
-              <p className="text-ivory-dim text-sm">{input?.user_name ? `Here's what I'd tell ${input.user_name}:` : "Here's what I'd tell a friend in your position:"}</p>
-              <p className="font-display text-lg text-path-risk mt-1" style={{ fontWeight: 500 }}>{lean}</p>
+            <StaggerItem className="mt-8">
+              <p className="text-ivory-dim text-sm mb-2">
+                {input?.user_name 
+                  ? `Here's what I'd tell ${input.user_name}:` 
+                  : "Here's what I'd tell a friend in your position:"}
+              </p>
+              <blockquote className="border-l-4 border-path-risk pl-5 py-2">
+                <p className="font-display text-xl md:text-2xl text-ivory italic leading-normal font-medium">
+                  {lean}
+                </p>
+              </blockquote>
             </StaggerItem>
           )}
 
+          {/* Next Move Action Card */}
           {nextMove && (
-            <StaggerItem className="mt-10">
-              <div className="bg-surface rounded-lg border border-surface-light border-l-4 border-l-path-risk p-6">
-                <p className="text-path-risk text-sm font-medium mb-3">Your next move</p>
-                <p className="text-ivory text-base leading-[1.75]">{nextMove}</p>
-                <p className="text-ivory-faint text-xs mt-3">Do this in the next 24 hours.</p>
+            <StaggerItem className="mt-8">
+              <div className="bg-surface rounded-lg border-2 border-path-risk/40 p-5 hover:border-path-risk/60 transition-colors">
+                <div className="flex items-center gap-3 mb-3">
+                  <MaterialIcon name="play_circle" className="text-path-risk text-3xl" />
+                  <h3 className="text-path-risk text-lg font-semibold">
+                    Your Next Move
+                  </h3>
+                </div>
+                
+                <p className="text-ivory text-sm md:text-base leading-relaxed mb-3">
+                  {nextMove}
+                </p>
+                
+                <p className="text-path-risk text-xs font-semibold uppercase tracking-wide">
+                  Do this in the next 24 hours
+                </p>
               </div>
             </StaggerItem>
           )}
 
+          {/* Resources Section with Icons */}
           {resources.length > 0 && (
-            <StaggerItem className="mt-12">
-              <p className="text-ivory-faint text-xs font-mono uppercase tracking-[0.2em] mb-6 text-center">What to explore next</p>
-              <div className="space-y-3">
-                {resources.map((r, i) => {
-                  const accentColor = { book: "border-l-path-safe", video: "border-l-path-risk", article: "border-l-ivory-dim", podcast: "border-l-green-500" }[r.type] || "border-l-ivory-dim";
-                  const typeBadge = { book: "bg-path-safe/10 text-path-safe", video: "bg-path-risk/10 text-path-risk", article: "bg-ivory-dim/10 text-ivory-dim", podcast: "bg-green-500/10 text-green-500" }[r.type] || "bg-ivory-dim/10 text-ivory-dim";
+            <StaggerItem className="mt-10">
+              <h2 className="text-ivory-faint text-[10px] font-mono uppercase tracking-[0.25em] mb-5 text-center">
+                What to explore next
+              </h2>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {resources.map((resource, i) => {
+                  const config = RESOURCE_CONFIG[resource.type] || {
+                    icon: 'article',
+                    iconColor: 'text-ivory-dim',
+                    borderColor: 'border-ivory-dim/30',
+                    badgeClass: 'bg-ivory-dim/10 text-ivory-dim'
+                  };
+                  
                   const card = (
-                    <div className={`bg-surface rounded-lg border border-surface-light border-l-4 ${accentColor} p-4`}>
-                      <div className="flex items-center gap-2 mb-1">
-                        <p className="text-ivory text-sm font-medium">{r.title}</p>
-                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${typeBadge}`}>{r.type}</span>
+                    <div className={`bg-surface rounded-lg border-2 ${config.borderColor} p-4 hover:scale-[1.02] transition-transform`}>
+                      <div className="flex items-start justify-between mb-2">
+                        <MaterialIcon name={config.icon} className={`${config.iconColor} text-xl`} />
+                        <span className={`text-[9px] font-mono px-2 py-0.5 rounded ${config.badgeClass}`}>
+                          {resource.type.toUpperCase()}
+                        </span>
                       </div>
-                      <p className="text-ivory-dim text-xs">{r.author}</p>
-                      <p className="text-ivory-faint text-xs mt-1">{r.why}</p>
+                      
+                      <h4 className="text-ivory text-sm font-semibold mb-1 line-clamp-2">
+                        {resource.title}
+                      </h4>
+                      <p className="text-ivory-dim text-xs mb-1">
+                        {resource.author}
+                      </p>
+                      <p className="text-ivory-faint text-xs leading-relaxed line-clamp-3">
+                        {resource.why}
+                      </p>
                     </div>
                   );
-                  return r.url ? (
-                    <a key={i} href={r.url} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">{card}</a>
+                  
+                  return resource.url ? (
+                    <a 
+                      key={i} 
+                      href={resource.url} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="block"
+                    >
+                      {card}
+                    </a>
                   ) : (
                     <div key={i}>{card}</div>
                   );
@@ -364,28 +538,49 @@ export default function Verdict() {
             {saved ? (
               <p className="text-path-safe text-sm font-mono">&#x2713; Saved to your journal</p>
             ) : isAuthenticated ? (
-              <button onClick={handleSave} disabled={saving} className="px-6 py-3 rounded-lg text-sm border border-path-safe text-ivory cursor-pointer transition-colors duration-200 hover:border-ivory disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-safe">
-                {saving ? "Saving\u2026" : "Save This Debate"}
+              <button 
+                onClick={handleSave} 
+                disabled={saving} 
+                className="px-6 py-3 rounded-lg text-sm font-medium bg-path-safe/10 border-2 border-path-safe text-path-safe hover:bg-path-safe hover:text-void transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-safe focus-visible:ring-offset-2 focus-visible:ring-offset-void disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {saving ? "Saving…" : "Save This Debate"}
               </button>
             ) : (
-              <button onClick={() => login()} className="px-6 py-3 rounded-lg text-sm border border-path-safe text-ivory cursor-pointer transition-colors duration-200 hover:border-ivory focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-safe">Sign In to Save</button>
+              <button 
+                onClick={() => login()} 
+                className="px-6 py-3 rounded-lg text-sm font-medium bg-path-safe/10 border-2 border-path-safe text-path-safe hover:bg-path-safe hover:text-void transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-safe focus-visible:ring-offset-2 focus-visible:ring-offset-void"
+              >
+                Sign In to Save
+              </button>
             )}
             {shareUrl ? (
-              <button onClick={() => { navigator.clipboard.writeText(shareUrl); toast("Link copied!"); }} className="px-6 py-3 rounded-lg text-sm border border-ivory-dim text-ivory-dim cursor-pointer transition-colors duration-200 hover:border-ivory hover:text-ivory">
+              <button 
+                onClick={() => { navigator.clipboard.writeText(shareUrl); toast("Link copied!"); }} 
+                className="px-6 py-3 rounded-lg text-sm font-medium border-2 border-ivory-dim text-ivory-dim hover:border-ivory hover:text-ivory transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ivory-dim focus-visible:ring-offset-2 focus-visible:ring-offset-void"
+              >
                 &#x2713; Link Copied &mdash; Copy Again
               </button>
             ) : (
-              <button onClick={handleShare} disabled={sharing} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim cursor-pointer transition-colors duration-200 hover:border-ivory-dim disabled:opacity-50 focus-visible:outline-none">
-                {sharing ? "Creating link\u2026" : "Share This Debate"}
+              <button 
+                onClick={handleShare} 
+                disabled={sharing} 
+                className="px-6 py-3 rounded-lg text-sm font-medium border-2 border-surface-light text-ivory-dim hover:border-ivory-dim hover:text-ivory transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ivory-dim focus-visible:ring-offset-2 focus-visible:ring-offset-void disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {sharing ? "Creating link…" : "Share This Debate"}
               </button>
             )}
             <button
               onClick={() => debate && generateDebatePdf(debate, input || null)}
-              className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim cursor-pointer transition-colors duration-200 hover:border-ivory-dim focus-visible:outline-none"
+              className="px-6 py-3 rounded-lg text-sm font-medium border-2 border-surface-light text-ivory-dim hover:border-ivory-dim hover:text-ivory transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ivory-dim focus-visible:ring-offset-2 focus-visible:ring-offset-void"
             >
               Download Report
             </button>
-            <button onClick={() => navigate("/decide")} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim cursor-pointer transition-colors duration-200 hover:border-ivory-dim focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ivory-dim">New Decision</button>
+            <button 
+              onClick={() => navigate("/decide")} 
+              className="px-6 py-3 rounded-lg text-sm font-medium border-2 border-surface-light text-ivory-dim hover:border-ivory-dim hover:text-ivory transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ivory-dim focus-visible:ring-offset-2 focus-visible:ring-offset-void"
+            >
+              New Decision
+            </button>
           </StaggerItem>
 
           {/* Outcome tracking: which path did you choose? */}
@@ -396,14 +591,14 @@ export default function Verdict() {
                 <button
                   onClick={() => handleChoosePath(pathAName)}
                   disabled={choosingPath}
-                  className="px-5 py-2.5 rounded-lg text-sm border border-path-safe text-path-safe cursor-pointer transition-colors duration-200 hover:bg-path-safe hover:text-void disabled:opacity-50"
+                  className="px-5 py-2.5 rounded-lg text-sm font-medium bg-path-safe/10 border-2 border-path-safe text-path-safe hover:bg-path-safe hover:text-void transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-safe focus-visible:ring-offset-2 focus-visible:ring-offset-void disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {pathAName}
                 </button>
                 <button
                   onClick={() => handleChoosePath(pathBName)}
                   disabled={choosingPath}
-                  className="px-5 py-2.5 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-50"
+                  className="px-5 py-2.5 rounded-lg text-sm font-medium bg-path-risk/10 border-2 border-path-risk text-path-risk hover:bg-path-risk hover:text-void transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-risk focus-visible:ring-offset-2 focus-visible:ring-offset-void disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {pathBName}
                 </button>
