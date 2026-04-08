@@ -111,6 +111,34 @@ Resources:
         - AttributeName: user_id
           KeyType: HASH
 
+  CheckinsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: diverge-checkins
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: checkin_id
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: send_at
+          AttributeType: N
+      KeySchema:
+        - AttributeName: checkin_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: status-send-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: send_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
   # ── Lambda: Debate (long-running, uses Function URL) ───────────
   DebateFunction:
     Type: AWS::Serverless::Function
@@ -183,6 +211,8 @@ Resources:
         Variables:
           DIVERGE_DEBATES_TABLE: !Ref DebatesTable
           DIVERGE_USERS_TABLE: !Ref UsersTable
+          DIVERGE_CHECKINS_TABLE: !Ref CheckinsTable
+          DIVERGE_CHECKINS_SCHEDULER_ENABLED: "true"
           DIVERGE_COGNITO_USER_POOL_ID: !Ref UserPool
           DIVERGE_COGNITO_CLIENT_ID: !Ref UserPoolClient
       Events:
@@ -190,6 +220,12 @@ Resources:
           Type: Api
           Properties:
             Path: /api/health
+            Method: get
+            RestApiId: !Ref ApiGateway
+        Capabilities:
+          Type: Api
+          Properties:
+            Path: /api/capabilities
             Method: get
             RestApiId: !Ref ApiGateway
         Templates:
@@ -242,17 +278,80 @@ Resources:
             RestApiId: !Ref ApiGateway
             Auth:
               Authorizer: CognitoAuth
+        Checkin:
+          Type: Api
+          Properties:
+            Path: /api/checkin
+            Method: post
+            RestApiId: !Ref ApiGateway
+        EmailResults:
+          Type: Api
+          Properties:
+            Path: /api/email-results
+            Method: post
+            RestApiId: !Ref ApiGateway
+        Tts:
+          Type: Api
+          Properties:
+            Path: /api/tts
+            Method: post
+            RestApiId: !Ref ApiGateway
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DebatesTable
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckinsTable
         - Statement:
             - Effect: Allow
               Action: cognito-idp:DescribeUserPool
               Resource: !GetAtt UserPool.Arn
+            - Effect: Allow
+              Action:
+                - bedrock:ListFoundationModels
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - polly:SynthesizeSpeech
+                - polly:DescribeVoices
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: "*"
 
   # ── API Gateway ────────────────────────────────────────────────
+  CheckinProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: diverge-checkin-processor
+      CodeUri: backend/
+      Handler: checkin_processor.handler
+      Timeout: 60
+      MemorySize: 256
+      Tracing: Active
+      Environment:
+        Variables:
+          DIVERGE_CHECKINS_TABLE: !Ref CheckinsTable
+          DIVERGE_CHECKINS_SCHEDULER_ENABLED: "true"
+      Events:
+        HourlySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 hour)
+            Enabled: true
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckinsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: "*"
+
   ApiGateway:
     Type: AWS::Serverless::Api
     Properties:

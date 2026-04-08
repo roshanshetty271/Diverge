@@ -50,27 +50,27 @@ export default function Landing() {
             <div className="relative">
               <div className="grid grid-cols-2 gap-0 aspect-[4/5] overflow-hidden border border-white/10">
                 {/* Path Alpha side */}
-                <div className="bg-gradient-to-b from-path-risk/20 to-void flex flex-col items-center justify-center p-8 border-r border-white/10">
-                  <span className="font-display text-path-risk text-6xl font-black mb-4">&alpha;</span>
-                  <span className="text-xs uppercase tracking-widest text-path-risk/60">Risk</span>
+                <div className="bg-gradient-to-b from-path-safe/20 to-void flex flex-col items-center justify-center p-8 border-r border-white/10">
+                  <span className="font-display text-path-safe text-6xl font-black mb-4">&alpha;</span>
+                  <span className="text-xs uppercase tracking-widest text-path-safe/60">Safety</span>
                   <div className="mt-8 space-y-3 text-left w-full">
-                    <div className="h-2 bg-path-risk/20 rounded w-full" />
-                    <div className="h-2 bg-path-risk/15 rounded w-4/5" />
-                    <div className="h-2 bg-path-risk/10 rounded w-3/5" />
-                    <div className="h-2 bg-path-risk/30 rounded w-full" />
-                    <div className="h-2 bg-path-risk/15 rounded w-2/3" />
+                    <div className="h-2 bg-path-safe/20 rounded w-full" />
+                    <div className="h-2 bg-path-safe/15 rounded w-4/5" />
+                    <div className="h-2 bg-path-safe/10 rounded w-3/5" />
+                    <div className="h-2 bg-path-safe/30 rounded w-full" />
+                    <div className="h-2 bg-path-safe/15 rounded w-2/3" />
                   </div>
                 </div>
                 {/* Path Beta side */}
-                <div className="bg-gradient-to-b from-path-safe/20 to-void flex flex-col items-center justify-center p-8">
-                  <span className="font-display text-path-safe text-6xl font-black mb-4">&beta;</span>
-                  <span className="text-xs uppercase tracking-widest text-path-safe/60">Safety</span>
+                <div className="bg-gradient-to-b from-path-risk/20 to-void flex flex-col items-center justify-center p-8">
+                  <span className="font-display text-path-risk text-6xl font-black mb-4">&beta;</span>
+                  <span className="text-xs uppercase tracking-widest text-path-risk/60">Risk</span>
                   <div className="mt-8 space-y-3 text-left w-full">
-                    <div className="h-2 bg-path-safe/15 rounded w-full" />
-                    <div className="h-2 bg-path-safe/20 rounded w-4/5" />
-                    <div className="h-2 bg-path-safe/25 rounded w-full" />
-                    <div className="h-2 bg-path-safe/15 rounded w-3/4" />
-                    <div className="h-2 bg-path-safe/10 rounded w-1/2" />
+                    <div className="h-2 bg-path-risk/15 rounded w-full" />
+                    <div className="h-2 bg-path-risk/20 rounded w-4/5" />
+                    <div className="h-2 bg-path-risk/25 rounded w-full" />
+                    <div className="h-2 bg-path-risk/15 rounded w-3/4" />
+                    <div className="h-2 bg-path-risk/10 rounded w-1/2" />
                   </div>
                 </div>
               </div>

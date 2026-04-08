@@ -62,8 +62,8 @@ def monte_carlo_financial(
             for _ in range(months):
                 inc = monthly_income * random.uniform(0.80, 1.20)
                 exp = expenses * random.uniform(0.85, 1.15)
-                # 4% chance of emergency expense per month
-                if random.random() < 0.04:
+                # 5% chance of emergency expense per month
+                if random.random() < 0.05:
                     exp += expenses * 2
                 balance += inc - exp
             finals.append(balance)

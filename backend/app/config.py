@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     # Model provider: "openai" or "bedrock"
     model_provider: str = "openai"
+    intended_provider: str = "bedrock"
+    allow_openai_fallback: bool = True
 
     # OpenAI (used when model_provider == "openai")
     openai_api_key: str = ""
@@ -66,6 +68,7 @@ class Settings(BaseSettings):
     ses_sender_email: str = ""
     ses_region: str = "us-east-1"
     checkins_table: str = "diverge-checkins"
+    checkins_scheduler_enabled: bool = False
 
     # Bedrock Knowledge Base (for research_insight tool)
     kb_id: str = ""

@@ -23,9 +23,9 @@ from strands import Agent
 
 from app.config import get_settings
 from app.agents.prompts import (
-    get_rounds, detect_decision_category, detect_brave_path,
+    get_rounds, detect_decision_category,
     build_alpha_prompt, build_beta_prompt, build_verdict_prompt,
-    PERSONA_CHALLENGER, PERSONA_DEFENDER, PERSONA_EQUAL,
+    PERSONA_CHALLENGER, PERSONA_DEFENDER,
 )
 from app.agents.metrics import extract_metrics
 from app.schemas import RoundResult, RoundMetrics, DebateResponse
@@ -207,23 +207,9 @@ def _safe_agent_output(result) -> str:
     return _clean_ai_slop(text)
 
 
-def _assign_personas(brave: str, user_ctx: dict) -> tuple[dict, dict]:
-    """Assign personas to alpha (path_a) and beta (path_b) based on bravery detection.
-
-    For neutral decisions: devil's advocate if no values, values-based if values exist.
-    """
-    if brave == "a":
-        return PERSONA_CHALLENGER, PERSONA_DEFENDER
-    if brave == "b":
-        return PERSONA_DEFENDER, PERSONA_CHALLENGER
-
-    values = user_ctx.get("values") or ""
-    if values:
-        return PERSONA_EQUAL, PERSONA_EQUAL
-
-    # No values, neutral paths: beta plays devil's advocate (challenges path_a, which
-    # the user likely leans toward since they listed it first)
-    return PERSONA_EQUAL, PERSONA_CHALLENGER
+def _assign_personas() -> tuple[dict, dict]:
+    """Keep alpha as the cautious voice and beta as the bold voice."""
+    return PERSONA_DEFENDER, PERSONA_CHALLENGER
 
 
 def _run_round(
@@ -401,14 +387,13 @@ def run_debate(user_context: dict) -> DebateResponse:
 
     category = detect_decision_category(user_context["path_a"], user_context["path_b"])
     user_context["_category"] = category
-    brave = detect_brave_path(user_context["path_a"], user_context["path_b"])
-    alpha_persona, beta_persona = _assign_personas(brave, user_context)
+    alpha_persona, beta_persona = _assign_personas()
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
 
     logger.info(
         f"Starting debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
-        f"(category={category}, brave={brave}, alpha={alpha_persona['label']}, beta={beta_persona['label']})"
+        f"(category={category}, alpha={alpha_persona['label']}, beta={beta_persona['label']})"
     )
     start_time = time.time()
 
@@ -472,14 +457,13 @@ def run_debate_streaming(user_context: dict):
 
     category = detect_decision_category(user_context["path_a"], user_context["path_b"])
     user_context["_category"] = category
-    brave = detect_brave_path(user_context["path_a"], user_context["path_b"])
-    alpha_persona, beta_persona = _assign_personas(brave, user_context)
+    alpha_persona, beta_persona = _assign_personas()
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
 
     logger.info(
         f"Starting streaming debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
-        f"(category={category}, brave={brave})"
+        f"(category={category})"
     )
     start_time = time.time()
 
@@ -561,14 +545,13 @@ def run_debate_token_streaming(user_context: dict):
 
     category = detect_decision_category(user_context["path_a"], user_context["path_b"])
     user_context["_category"] = category
-    brave = detect_brave_path(user_context["path_a"], user_context["path_b"])
-    alpha_persona, beta_persona = _assign_personas(brave, user_context)
+    alpha_persona, beta_persona = _assign_personas()
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
 
     logger.info(
         f"Starting token-streaming debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
-        f"(category={category}, brave={brave})"
+        f"(category={category})"
     )
     start_time = time.time()
 

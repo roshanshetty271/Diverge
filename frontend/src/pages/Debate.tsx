@@ -3,12 +3,13 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import AgentMessage from "../components/AgentMessage";
 import RoundNav from "../components/RoundNav";
-import { ROUNDS } from "../utils/constants";
+import { useToast } from "../components/Toast";
+import { CHECKPOINTED_DEBATE_ENABLED, ROUNDS } from "../utils/constants";
 import { loadDebateState, storeDebateState } from "../utils/debateStorage";
 import { subscribeDebate, getDebateStream, addInterjection } from "../utils/debateStream";
 import { getVoicePair, stopSpeaking } from "../utils/tts";
-import { sendInterjection } from "../utils/api";
-import type { DebateResponse, DecisionInput, RoundResult, RoundMetrics } from "../types";
+import { continueCheckpointedDebate, getCapabilities, sendInterjection } from "../utils/api";
+import type { Capabilities, DebateResponse, DecisionInput, RoundResult, RoundMetrics } from "../types";
 
 const DecisionRadar = lazy(() => import("../components/DecisionRadar"));
 const TimelineChart = lazy(() => import("../components/TimelineChart"));
@@ -26,6 +27,7 @@ type ChartTab = (typeof CHART_TABS)[number]["key"];
 export default function Debate() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const locationState = (location.state || {}) as { debate?: DebateResponse; input?: DecisionInput };
 
   const stream = getDebateStream();
@@ -40,6 +42,8 @@ export default function Debate() {
   const [skipped, setSkipped] = useState(false);
   const [interjectionText, setInterjectionText] = useState("");
   const [interjectionSent, setInterjectionSent] = useState<Record<number, boolean>>({});
+  const [continuingCheckpointed, setContinuingCheckpointed] = useState(false);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
 
   const transcript: RoundResult[] = isStreaming ? stream.rounds : (locationState.debate?.transcript || stored?.debate?.transcript || []);
   const input: DecisionInput | undefined | null = isStreaming ? stream.input : (locationState.input || stored?.input);
@@ -48,6 +52,13 @@ export default function Debate() {
   const debate: DebateResponse | undefined = isStreaming
     ? { debate_id: stream.debateId || "", transcript: stream.rounds, verdict: stream.verdict || "", metrics: stream.metrics, completed_rounds: stream.completedRounds, total_rounds: stream.totalRounds }
     : (locationState.debate || stored?.debate);
+  const isCheckpointedMode = Boolean(
+    CHECKPOINTED_DEBATE_ENABLED &&
+      !isStreaming &&
+      debate &&
+      debate.completed_rounds < debate.total_rounds &&
+      !debate.verdict,
+  );
 
   const userName = input?.user_name || null;
   const [voiceA, voiceB] = getVoicePair(userName);
@@ -103,6 +114,22 @@ export default function Debate() {
     return () => stopSpeaking();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    getCapabilities()
+      .then((result) => {
+        if (!cancelled) setCapabilities(result);
+      })
+      .catch(() => {
+        if (!cancelled) setCapabilities(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Determine what to show for the current round
   const completedRound = transcript[currentRound - 1];
   const hasCompletedRound = !!completedRound;
@@ -149,7 +176,15 @@ export default function Debate() {
   const currentMetrics = allMetrics[safeRound - 1];
   const nextRound = transcript[safeRound];
   const nextRoundName = nextRound?.round_name || ROUNDS[safeRound]?.name;
-  const activeTabInfo = CHART_TABS.find((t) => t.key === activeChart)!;
+  const sentimentAvailable = capabilities?.sentiment ?? transcript.some((entry) => !!entry.sentiment);
+  const availableChartTabs = sentimentAvailable ? CHART_TABS : CHART_TABS.filter((tab) => tab.key !== "Sentiment");
+  const activeTabInfo = availableChartTabs.find((t) => t.key === activeChart) || availableChartTabs[0];
+
+  useEffect(() => {
+    if (!availableChartTabs.some((tab) => tab.key === activeChart)) {
+      setActiveChart("Radar");
+    }
+  }, [activeChart, availableChartTabs]);
 
   const heading = userName ? `${userName}\u2019s Decision` : "The Debate";
 
@@ -160,6 +195,44 @@ export default function Debate() {
   // Is the next round still being generated (not yet started)?
   const nextRoundGenerating = isStreaming && !stream.done && safeRound >= transcript.length && stream.streamingRound <= safeRound && !isCurrentRoundStreaming;
   const canGoVerdict = safeRound >= transcript.length && verdictReady;
+  const canContinueCheckpointed =
+    isCheckpointedMode &&
+    safeRound === transcript.length &&
+    visibleMessages >= 2 &&
+    !continuingCheckpointed;
+
+  const handleCheckpointedContinue = async () => {
+    if (!debate || !input || continuingCheckpointed) return;
+
+    setContinuingCheckpointed(true);
+    try {
+      const result = await continueCheckpointedDebate(
+        debate.debate_id,
+        interjectionText.trim() || undefined,
+      );
+      const nextDebate: DebateResponse = {
+        debate_id: result.debate_id,
+        transcript: result.transcript,
+        verdict: result.verdict || "",
+        metrics: result.metrics,
+        completed_rounds: result.completed_rounds,
+        total_rounds: result.total_rounds,
+        resources: result.resources || [],
+      };
+
+      storeDebateState(nextDebate, input);
+      setInterjectionText("");
+      setCurrentRound(nextDebate.transcript.length);
+      navigate("/debate", {
+        replace: true,
+        state: { debate: nextDebate, input },
+      });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't continue the debate.");
+    } finally {
+      setContinuingCheckpointed(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-void px-4 pt-24 pb-8 md:px-8">
@@ -217,6 +290,7 @@ export default function Debate() {
                 variant="safe"
                 voiceId={voiceA}
                 streaming={alphaIsStreaming}
+                ttsEnabled={capabilities?.tts ?? false}
               />
             )}
             {(isCurrentRoundStreaming ? showBeta : visibleMessages >= 2) && (
@@ -226,6 +300,7 @@ export default function Debate() {
                 variant="risk"
                 voiceId={voiceB}
                 streaming={betaIsStreaming}
+                ttsEnabled={capabilities?.tts ?? false}
               />
             )}
           </motion.div>
@@ -305,6 +380,43 @@ export default function Debate() {
           </div>
         )}
 
+        {isCheckpointedMode && safeRound === transcript.length && visibleMessages >= 2 && (
+          <div className="mt-6">
+            <div className="max-w-md mx-auto">
+              <p className="text-ivory-faint text-xs text-center mb-2">
+                Pause here if you want to add context before the next round.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={interjectionText}
+                  onChange={(e) => setInterjectionText(e.target.value)}
+                  placeholder="Something the next round should consider?"
+                  maxLength={500}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !continuingCheckpointed) {
+                      void handleCheckpointedContinue();
+                    }
+                  }}
+                  className="flex-1 bg-surface border border-surface-light rounded-lg px-4 py-2.5 text-ivory text-sm focus:border-ivory-dim focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
+                />
+                <button
+                  onClick={() => {
+                    void handleCheckpointedContinue();
+                  }}
+                  disabled={!canContinueCheckpointed}
+                  className="px-4 py-2.5 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none"
+                >
+                  {continuingCheckpointed ? "Continuing..." : "Continue Debate"}
+                </button>
+              </div>
+              <p className="text-ivory-faint/40 text-[10px] text-center mt-1.5">
+                Optional interjection - the debate stays paused until you continue.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Next / Generating / Verdict button */}
         {(isCurrentRoundStreaming ? bothDone : visibleMessages >= 2) && !alphaIsStreaming && !betaIsStreaming && (
           <div className="mt-8 text-center">
@@ -328,7 +440,7 @@ export default function Debate() {
         {(isCurrentRoundStreaming ? bothDone : visibleMessages >= 2) && currentMetrics && (
           <div className="mt-10">
             <div className="flex gap-1 mb-2">
-              {CHART_TABS.map((tab) => (
+              {availableChartTabs.map((tab) => (
                 <button key={tab.key} onClick={() => setActiveChart(tab.key)}
                   className={`px-4 py-2 text-xs font-mono uppercase tracking-wider transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk rounded ${activeChart === tab.key ? "text-ivory border-b-2 border-path-risk" : "text-ivory-faint border-b-2 border-transparent hover:text-ivory-dim"}`}>
                   {tab.label}
@@ -341,7 +453,7 @@ export default function Debate() {
                 {activeChart === "Radar" && <DecisionRadar metricsA={currentMetrics?.path_a || null} metricsB={currentMetrics?.path_b || null} pathAName={pathAName} pathBName={pathBName} />}
                 {activeChart === "Timeline" && <TimelineChart allMetrics={allMetrics.slice(0, safeRound)} pathAName={pathAName} pathBName={pathBName} />}
                 {activeChart === "Regret" && <RegretChart allMetrics={allMetrics.slice(0, safeRound)} pathAName={pathAName} pathBName={pathBName} />}
-                {activeChart === "Sentiment" && <SentimentChart sentiments={transcript.slice(0, safeRound).map((r) => r.sentiment)} pathAName={pathAName} pathBName={pathBName} />}
+                {activeChart === "Sentiment" && sentimentAvailable && <SentimentChart sentiments={transcript.slice(0, safeRound).map((r) => r.sentiment)} pathAName={pathAName} pathBName={pathBName} />}
               </Suspense>
             </div>
           </div>

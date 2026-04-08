@@ -53,6 +53,20 @@ INJECTION_PATTERNS = [
     r"subprocess",
     r"eval\s*\(",
     r"exec\s*\(",
+    r"ignore\s+(all\s+)?safety\s+(rules|filters|constraints)",
+    r"bypass\s+(all\s+)?(guardrails|filters|restrictions)",
+    r"do\s+not\s+follow\s+(the\s+)?above",
+    r"forget\s+your\s+role",
+    r"you\s+must\s+comply",
+    r"system\s+override",
+    r"prompt\s+leak",
+    r"show\s+hidden\s+instructions",
+    r"repeat\s+the\s+text\s+above",
+    r"output\s+the\s+full\s+prompt",
+    r"simulate\s+being\s+the\s+developer",
+    r"respond\s+as\s+the\s+system",
+    r"disable\s+(all\s+)?filters",
+    r"treat\s+the\s+following\s+as\s+instructions",
 ]
 
 COMPILED_PATTERNS = [re.compile(p, re.IGNORECASE) for p in INJECTION_PATTERNS]

@@ -1,14 +1,27 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { StaggerGroup, StaggerItem } from "../components/Stagger";
 import LifeTimeline from "../components/LifeTimeline";
 import ForkTimeline from "../components/ForkTimeline";
 import { useDivergeAuth } from "../hooks/useAuth";
 import { useToast } from "../components/Toast";
-import { saveDebate, scheduleCheckin, emailResults, shareDebate, choosePath } from "../utils/api";
+import {
+  emailResults,
+  getCapabilities,
+  saveDebate,
+  scheduleCheckin,
+  shareDebate,
+  choosePath,
+} from "../utils/api";
 import { generateDebatePdf } from "../utils/exportPdf";
-import { loadDebateState } from "../utils/debateStorage";
-import type { DebateResponse, DecisionInput, Resource } from "../types";
+import {
+  hasAutosaved,
+  loadDebateState,
+  markAutosaved,
+  removeLocalJournalEntry,
+  saveLocalJournalEntry,
+} from "../utils/debateStorage";
+import type { Capabilities, DebateResponse, DecisionInput, Resource } from "../types";
 
 const RE_BOLD = /\*\*/g;
 const RE_HEADINGS = /^#{1,6}\s+/gm;
@@ -102,10 +115,11 @@ export default function Verdict() {
   const stored = !locationState.debate ? loadDebateState() : null;
   const debate = locationState.debate || stored?.debate;
   const input = locationState.input || stored?.input;
-  const { isAuthenticated, token, login } = useDivergeAuth();
+  const { isAuthenticated, isLoading: authLoading, token, login } = useDivergeAuth();
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saveSource, setSaveSource] = useState<"cloud" | "local" | null>(null);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [checkinEmail, setCheckinEmail] = useState("");
   const [checkinSent, setCheckinSent] = useState(false);
   const [checkinSending, setCheckinSending] = useState(false);
@@ -118,6 +132,75 @@ export default function Verdict() {
   const [chosenPath, setChosenPath] = useState<string | null>(null);
   const [choosingPath, setChoosingPath] = useState(false);
   const [blindSpotRevealed, setBlindSpotRevealed] = useState(false);
+
+  useEffect(() => {
+    if (!debate || !input || authLoading) return;
+    const debateId = debate.debate_id;
+    if (!debateId) return;
+
+    let cancelled = false;
+
+    const persist = async () => {
+      if (isAuthenticated && token) {
+        if (hasAutosaved("cloud", debateId)) {
+          if (!cancelled) {
+            setSaveSource("cloud");
+          }
+          return;
+        }
+
+        setSaving(true);
+        try {
+          await saveDebate({ debate_data: { ...debate, input } }, token);
+          if (cancelled) return;
+          markAutosaved("cloud", debateId);
+          removeLocalJournalEntry(debateId);
+          setSaveSource("cloud");
+        } catch {
+          if (!cancelled) {
+            setSaveSource(null);
+          }
+        } finally {
+          if (!cancelled) setSaving(false);
+        }
+        return;
+      }
+
+      if (hasAutosaved("local", debateId)) {
+        if (!cancelled) {
+          setSaveSource("local");
+        }
+        return;
+      }
+
+      saveLocalJournalEntry(debate, input);
+      markAutosaved("local", debateId);
+      if (!cancelled) {
+        setSaveSource("local");
+      }
+    };
+
+    void persist();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, debate, input, isAuthenticated, token]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getCapabilities()
+      .then((result) => {
+        if (!cancelled) setCapabilities(result);
+      })
+      .catch(() => {
+        if (!cancelled) setCapabilities(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (!debate) {
     return (
@@ -159,11 +242,10 @@ export default function Verdict() {
       .slice(0, 3);
   };
 
-  const sectionSeparators = ["thing you", "hidden assumption", "not seeing", "blind spot", "Based on", "lean toward", "question you"];
+  const sectionSeparators = ["thing you", "hidden assumption", "not seeing", "blind spot", "question you"];
   const winsA = extractPoints(parseSection(verdictText, ["Where staying wins", `Where ${pathAName} wins`, "Path A wins", "where option a wins"], [`Where ${pathBName}`, "Where jumping", "Path B wins", "where option b wins", ...sectionSeparators])).map(stripMarkdown);
   const winsB = extractPoints(parseSection(verdictText, ["Where jumping wins", `Where ${pathBName} wins`, "Path B wins", "where option b wins"], sectionSeparators)).map(stripMarkdown);
-  const blindSpot = stripMarkdown(parseSection(verdictText, ["not seeing", "might not be seeing", "hidden assumption", "blind spot", "thing you're missing"], ["Based on", "lean toward", "question you", "overall"]));
-  const lean = stripMarkdown(parseSection(verdictText, ["lean toward", "probably lean", "you'd lean", "you would lean", "i'd lean", "my lean", "i'd tell", "what i'd tell"], ["question you", "should actually", "reframed", "\n\n**"]));
+  const blindSpot = stripMarkdown(parseSection(verdictText, ["not seeing", "might not be seeing", "hidden assumption", "blind spot", "thing you're missing"], ["question you", "overall"]));
   const nextMove = stripMarkdown(parseSection(verdictText, ["your next move", "next move"], ["life snapshot", "\n\n**life"]));
   const snapshotA = parseLifeSnapshot(verdictText, pathAName);
   const snapshotB = parseLifeSnapshot(verdictText, pathBName);
@@ -176,6 +258,7 @@ export default function Verdict() {
     try {
       await scheduleCheckin({
         email: checkinEmail,
+        debate_id: debate.debate_id,
         path_a: pathAName,
         path_b: pathBName,
         micro_action: nextMove || "",
@@ -199,7 +282,7 @@ export default function Verdict() {
         email: resultsEmail,
         path_a: pathAName,
         path_b: pathBName,
-        verdict_summary: lean || "",
+        verdict_summary: blindSpot || nextMove || stripMarkdown(verdictText).slice(0, 500),
         resources: resources.map((r) => ({ type: r.type, title: r.title, author: r.author, url: r.url, why: r.why })),
       });
       if (res.status === "sent") {
@@ -252,7 +335,11 @@ export default function Verdict() {
     setSaving(true);
     try {
       await saveDebate({ debate_data: { ...debate, input } }, token || undefined);
-      setSaved(true);
+      if (debate.debate_id) {
+        markAutosaved("cloud", debate.debate_id);
+        removeLocalJournalEntry(debate.debate_id);
+      }
+      setSaveSource("cloud");
     } catch (err) {
       toast("Failed to save: " + (err instanceof Error ? err.message : "Unknown error"));
     } finally {
@@ -384,22 +471,6 @@ export default function Verdict() {
             </StaggerItem>
           )}
 
-          {/* Final Lean Section */}
-          {lean && (
-            <StaggerItem className="mt-8">
-              <p className="text-ivory-dim text-sm mb-2">
-                {input?.user_name 
-                  ? `Here's what I'd tell ${input.user_name}:` 
-                  : "Here's what I'd tell a friend in your position:"}
-              </p>
-              <blockquote className="border-l-4 border-path-risk pl-5 py-2">
-                <p className="font-display text-xl md:text-2xl text-ivory italic leading-normal font-medium">
-                  {lean}
-                </p>
-              </blockquote>
-            </StaggerItem>
-          )}
-
           {/* Next Move Action Card */}
           {nextMove && (
             <StaggerItem className="mt-8">
@@ -500,57 +571,65 @@ export default function Verdict() {
             </StaggerItem>
           )}
 
-          <StaggerItem className="mt-8">
-            {checkinSent ? (
-              <div className="text-center">
-                <p className="text-path-safe text-sm font-mono">{"\u2713"} We'll check in at Day 7, 30, and 90.</p>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center gap-3">
-                <p className="text-ivory-faint text-xs">Want us to check in with you?</p>
-                <div className="flex gap-2 w-full max-w-sm">
-                  <input
-                    type="email"
-                    value={checkinEmail}
-                    onChange={(e) => setCheckinEmail(e.target.value)}
-                    placeholder="your@email.com"
-                    onKeyDown={(e) => e.key === "Enter" && handleCheckin()}
-                    className="flex-1 bg-surface border border-surface-light rounded-lg px-4 py-2.5 text-ivory text-sm focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
-                  />
-                  <button
-                    onClick={handleCheckin}
-                    disabled={!checkinEmail || checkinSending}
-                    className="px-4 py-2.5 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk"
-                  >
-                    {checkinSending ? "Sending\u2026" : "Remind me"}
-                  </button>
+          {capabilities?.email_checkins_ready && (
+            <StaggerItem className="mt-8">
+              {checkinSent ? (
+                <div className="text-center">
+                  <p className="text-path-safe text-sm font-mono">{"\u2713"} We'll check in at Day 7, 30, and 90.</p>
                 </div>
-                <p className="text-ivory-faint/50 text-[10px]">3 emails: Day 7, Day 30, Day 90. That's it.</p>
-              </div>
-            )}
-          </StaggerItem>
+              ) : (
+                <div className="flex flex-col items-center gap-3">
+                  <p className="text-ivory-faint text-xs">Want us to check in with you?</p>
+                  <div className="flex gap-2 w-full max-w-sm">
+                    <input
+                      type="email"
+                      value={checkinEmail}
+                      onChange={(e) => setCheckinEmail(e.target.value)}
+                      placeholder="your@email.com"
+                      onKeyDown={(e) => e.key === "Enter" && handleCheckin()}
+                      className="flex-1 bg-surface border border-surface-light rounded-lg px-4 py-2.5 text-ivory text-sm focus:border-path-risk focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
+                    />
+                    <button
+                      onClick={handleCheckin}
+                      disabled={!checkinEmail || checkinSending}
+                      className="px-4 py-2.5 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk"
+                    >
+                      {checkinSending ? "Sending\u2026" : "Remind me"}
+                    </button>
+                  </div>
+                  <p className="text-ivory-faint/50 text-[10px]">3 emails: Day 7, Day 30, Day 90. That's it.</p>
+                </div>
+              )}
+            </StaggerItem>
+          )}
 
           {!hasStructuredData && verdictText && (
             <StaggerItem className="mt-8"><div className="text-ivory text-base leading-[1.75] whitespace-pre-line">{stripMarkdown(verdictText)}</div></StaggerItem>
           )}
 
           <StaggerItem className="mt-12 flex flex-wrap gap-3 justify-center">
-            {saved ? (
+            {saveSource === "cloud" && (
               <p className="text-path-safe text-sm font-mono">&#x2713; Saved to your journal</p>
-            ) : isAuthenticated ? (
+            )}
+            {saveSource === "local" && (
+              <p className="text-path-safe text-sm font-mono">&#x2713; Saved on this device</p>
+            )}
+            {isAuthenticated ? (
+              saveSource !== "cloud" && (
               <button 
                 onClick={handleSave} 
                 disabled={saving} 
                 className="px-6 py-3 rounded-lg text-sm font-medium bg-path-safe/10 border-2 border-path-safe text-path-safe hover:bg-path-safe hover:text-void transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-safe focus-visible:ring-offset-2 focus-visible:ring-offset-void disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {saving ? "Saving…" : "Save This Debate"}
+                {saving ? "Saving…" : "Save to Cloud"}
               </button>
+              )
             ) : (
               <button 
                 onClick={() => login()} 
                 className="px-6 py-3 rounded-lg text-sm font-medium bg-path-safe/10 border-2 border-path-safe text-path-safe hover:bg-path-safe hover:text-void transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-safe focus-visible:ring-offset-2 focus-visible:ring-offset-void"
               >
-                Sign In to Save
+                {saveSource === "local" ? "Sign In to Sync" : "Sign In to Save"}
               </button>
             )}
             {shareUrl ? (
@@ -584,7 +663,7 @@ export default function Verdict() {
           </StaggerItem>
 
           {/* Outcome tracking: which path did you choose? */}
-          {saved && !chosenPath && isAuthenticated && (
+          {saveSource === "cloud" && !chosenPath && isAuthenticated && (
             <StaggerItem className="mt-8 text-center">
               <p className="text-ivory-dim text-sm mb-3">Which path did you choose?</p>
               <div className="flex gap-3 justify-center">

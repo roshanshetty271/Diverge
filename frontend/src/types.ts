@@ -55,6 +55,18 @@ export interface DebateResponse {
   resources?: Resource[];
 }
 
+export interface CheckpointedDebateResponse {
+  status: "paused" | "complete";
+  debate_id: string;
+  transcript: RoundResult[];
+  verdict: string;
+  metrics: (RoundMetrics | null)[];
+  completed_rounds: number;
+  total_rounds: number;
+  resources?: Resource[];
+  next_round_number?: number | null;
+}
+
 export interface DecisionInput {
   path_a: string;
   path_b: string;
@@ -66,6 +78,18 @@ export interface DecisionInput {
   time_horizon?: string;
   constraints?: string | null;
   writing_samples: string | null;
+}
+
+export interface Capabilities {
+  active_provider: string;
+  intended_provider: string;
+  openai_fallback_active: boolean;
+  bedrock_ready: boolean;
+  tts: boolean;
+  sentiment: boolean;
+  email_checkins_ready: boolean;
+  knowledge_base: boolean;
+  agentcore_memory: boolean;
 }
 
 export interface TemplateOption {
@@ -94,8 +118,9 @@ export interface JournalEntry {
   id: string;
   pathA: string;
   pathB: string;
-  lean?: string;
+  summary?: string;
   date: string;
+  source?: "cloud" | "local";
   data?: DebateResponse;
   input?: DecisionInput;
 }

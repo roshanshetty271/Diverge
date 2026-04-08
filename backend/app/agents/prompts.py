@@ -5,43 +5,43 @@ Makes it easy to iterate on prompts without changing code.
 """
 
 ROUND2_CAREER = {
-    "name": "The Ledger", "title": "Year 2-3: The Career Reality",
+    "name": "The Ledger", "title": "Year 2-3: The Ledger",
     "timeline": "year 2-3",
     "focus": "It's been 2-3 years. The honeymoon is over. What does your resume look like? Are you growing or plateauing? Describe ONE specific moment — a meeting, a conversation, a project — that captures whether this career path is actually delivering. Then challenge the other version's career story: what skills are they NOT building? What doors quietly closed?",
 }
 
 ROUND2_STARTUP = {
-    "name": "The Burn", "title": "Year 2-3: The Startup Reality",
+    "name": "The Ledger", "title": "Year 2-3: The Ledger",
     "timeline": "year 2-3",
     "focus": "It's been 2-3 years. What does your bank account look like? Did you find product-market fit or are you still pivoting? Describe ONE specific moment that captures the financial and emotional reality of this path. Then challenge the other version: what are they NOT telling you about their runway, their relationships, or their sleep?",
 }
 
 ROUND2_FINANCIAL = {
-    "name": "The Ledger", "title": "Year 2-3: The Money Reality",
+    "name": "The Ledger", "title": "Year 2-3: The Ledger",
     "timeline": "year 2-3",
     "focus": "It's been 2-3 years. The honeymoon is over. Talk about the financial reality: what can you afford now? What keeps you up at night? What financial freedom or stress did this path bring? Use real numbers if you have them. Then challenge what the other version said about their finances — are they lying to themselves?",
 }
 
 ROUND2_RELATIONSHIP = {
-    "name": "The Mirror", "title": "Year 2-3: The Emotional Reality",
+    "name": "The Ledger", "title": "Year 2-3: The Ledger",
     "timeline": "year 2-3",
     "focus": "It's been 2-3 years. The initial rush is gone. What's the emotional truth now? Describe ONE specific moment from your week that captures how this path actually feels. Then challenge the other version — what are they NOT telling you about how they really feel?",
 }
 
 ROUND2_HEALTH = {
-    "name": "The Mirror", "title": "Year 2-3: The Body Check",
+    "name": "The Ledger", "title": "Year 2-3: The Ledger",
     "timeline": "year 2-3",
     "focus": "It's been 2-3 years. How does daily life physically feel? Describe ONE specific moment — waking up, looking in the mirror, climbing stairs, fitting into old clothes — that captures what this path did to your body and mind. Then challenge the other version: what are they NOT telling you about the habits they broke or never built?",
 }
 
 ROUND2_EDUCATION = {
-    "name": "The Investment", "title": "Year 2-3: The Learning Curve",
+    "name": "The Ledger", "title": "Year 2-3: The Ledger",
     "timeline": "year 2-3",
     "focus": "It's been 2-3 years. Was the investment worth it? Describe ONE specific moment — a class, a debt statement, a job interview, a realization — that captures the reality of this path. What doors opened? What doors closed because of the time and money spent? Then challenge the other version: what opportunity cost are they ignoring?",
 }
 
 ROUND2_GENERAL = {
-    "name": "The Ripple", "title": "Year 2-3: The Ripple Effects",
+    "name": "The Ledger", "title": "Year 2-3: The Ledger",
     "timeline": "year 2-3",
     "focus": "It's been 2-3 years. Describe ONE consequence you never saw coming — something this choice changed that surprised you. Then challenge the other version: what ripple effects are they conveniently ignoring?",
 }
@@ -51,13 +51,13 @@ ROUNDS_BASE = [
      "timeline": "year 1",
      "focus": "It's been one year since you chose this path. What happened in the first months? Describe ONE specific moment that made you think 'I made the right call' or 'what have I done?' Be real about the doubt AND the conviction. Then tell the other version why their first year was probably worse."},
     None,  # placeholder — filled by get_rounds()
-    {"name": "The Stranger", "title": "Year 5: Who You Became",
+    {"name": "The Mirror", "title": "Year 5: The Mirror",
      "timeline": "year 5",
      "focus": "It's been 5 years. You're a different person now. Describe ONE moment where you barely recognized yourself — in a good or bad way. How do people who knew you before react to who you are now? Then attack the other version's identity: what did THEY become that they're not admitting?"},
-    {"name": "The Loop", "title": "Year 10: The Regret Test",
+    {"name": "The Ghost", "title": "Year 10: The Ghost",
      "timeline": "year 10",
      "focus": "It's been a full decade. Look back honestly. What did this path cost you? What's the ONE thing you lost that still stings? But then — what would haunt you MORE if you'd chosen the other path? This is where you get brutally honest. Rip apart the other version's decade: what did THEY lose that they're pretending doesn't matter?"},
-    {"name": "The Knot", "title": "Final Words",
+    {"name": "The Knot", "title": "Final Words: The Knot",
      "timeline": "looking back on all of it",
      "focus": "Last chance. In under 80 words: what's the one thing they NEED to understand about this path that they can't see from where they're standing right now? Be direct. Be personal. Make it land. If you mention the deathbed, name a SPECIFIC face, place, or moment — not a concept. 'I never told Sarah' hits harder than 'I never pursued authenticity.'"},
 ]
@@ -342,12 +342,9 @@ def build_beta_prompt(user_context: dict, round_info: dict, persona: dict | None
 
 def build_verdict_prompt(user_context: dict, transcript_text: str) -> str:
     """Build the verdict prompt with growth bias and optional user name."""
-    name = user_context.get("user_name") or ""
     path_a = user_context["path_a"]
     path_b = user_context["path_b"]
     values = user_context.get("values") or "not specified"
-
-    friend_line = f"Here's what I'd tell {name}:" if name else "Here's what I'd tell a friend in your position:"
 
     return f"""You just watched two versions of the same person live out their futures across 5 rounds. Here is what they described:
 
@@ -369,8 +366,8 @@ CRITICAL RULES:
 - For LOW-STAKES fears (talking to someone, expressing feelings, social anxiety, asking someone out): the worst case is rejection or embarrassment. You can push them toward courage here.
 - For HIGH-STAKES decisions (career changes, startups, money, relocating, quitting a job): present REAL risks honestly. Startups have a 90% failure rate. Quitting a stable job has real financial consequences. Moving cities can mean losing your support network. Don't romanticize risk. Don't gloss over what can go wrong.
 - ALWAYS acknowledge what each path genuinely costs. Show the REAL downside of both.
-- This person came here because they're stuck. Help them SEE both futures clearly so THEY can decide. Don't decide for them unless one path is clearly just a fear of embarrassment.
-- NEVER say "find a balance between both." That's not helpful. Present both sides honestly and give a clear lean WITH caveats.
+- This person came here because they're stuck. Help them SEE both futures clearly so THEY can decide. Do not choose for them.
+- NEVER say "find a balance between both." That's not helpful. Present both sides honestly without picking a winner.
 - Be specific to THEIR situation. Reference specific things from the debate.
 - When relevant, weave in these research findings naturally (don't force them if they don't fit):
   * People regret inaction far more than action over time, especially at 10+ years (Gilovich & Medvec, replicated 2022, n=988).
@@ -392,9 +389,6 @@ Format your response with these exact section headers:
 
 **The thing you might not be seeing:**
 [One paragraph. The hidden assumption or blind spot. This is the most important part. Be specific to their situation, not generic.]
-
-**{friend_line}**
-[One clear, direct sentence. For low-stakes fears (just talking/expressing yourself), push them. For high-stakes decisions (money, career, family), be honest about the risk and give your lean WITH the caveat of what could go wrong.]
 
 **The question you should actually be asking:**
 [Reframe. The binary choice often hides a deeper question. Name it.]

@@ -13,6 +13,17 @@ logger = logging.getLogger(__name__)
 
 # GSI name defined in template.yaml
 USER_DEBATES_INDEX = "user-debates-index"
+CHECKINS_STATUS_INDEX = "status-send-index"
+PROFILE_FIELDS = (
+    "user_name",
+    "age",
+    "financial_context",
+    "values",
+    "risk_level",
+    "time_horizon",
+    "constraints",
+    "writing_samples",
+)
 
 
 def _get_table(table_name: str):
@@ -31,6 +42,7 @@ def save_debate(debate_id: str, user_id: str, user_input: dict, debate_data: dic
         "user_id": user_id,
         "path_a": user_input.get("path_a", ""),
         "path_b": user_input.get("path_b", ""),
+        "input": user_input,
         "verdict": debate_data.get("verdict", ""),
         "transcript": debate_data.get("transcript", []),
         "metrics": debate_data.get("metrics", []),
@@ -73,6 +85,182 @@ def get_user_debates(user_id: str, limit: int = 50, last_key: dict | None = None
     except Exception as e:
         logger.error(f"Failed to get debates for user {user_id}: {e}")
         return {"items": []}
+
+
+def get_user_profile(user_id: str) -> dict | None:
+    """Get a saved profile context for an authenticated user."""
+    settings = get_settings()
+    table = _get_table(settings.users_table)
+
+    try:
+        response = table.get_item(Key={"user_id": user_id})
+        return response.get("Item")
+    except Exception as e:
+        logger.error(f"Failed to get profile for {user_id}: {e}")
+        return None
+
+
+def upsert_user_profile(user_id: str, profile_data: dict) -> dict:
+    """Persist profile context for future debates."""
+    settings = get_settings()
+    table = _get_table(settings.users_table)
+
+    clean_profile = {
+        field: value
+        for field in PROFILE_FIELDS
+        if (value := profile_data.get(field)) not in (None, "")
+    }
+    now = datetime.now(timezone.utc).isoformat()
+
+    try:
+        existing = get_user_profile(user_id) or {"user_id": user_id, "created_at": now}
+        item = {
+            **existing,
+            **clean_profile,
+            "user_id": user_id,
+            "updated_at": now,
+        }
+        table.put_item(Item=item)
+        return item
+    except Exception as e:
+        logger.error(f"Failed to upsert profile for {user_id}: {e}")
+        raise
+
+
+def create_debate_session(debate_id: str, user_id: str, user_input: dict, session_data: dict) -> dict:
+    """Create a checkpointed debate session item."""
+    settings = get_settings()
+    table = _get_table(settings.debates_table)
+    now = datetime.now(timezone.utc)
+
+    item = {
+        "debate_id": debate_id,
+        "user_id": user_id,
+        "session_type": "checkpointed",
+        "status": session_data.get("status", "paused"),
+        "current_round_index": session_data.get("current_round_index", 0),
+        "input": user_input,
+        "transcript": session_data.get("transcript", []),
+        "metrics": session_data.get("metrics", []),
+        "debate_summary": session_data.get("debate_summary", ""),
+        "prev_beta": session_data.get("prev_beta"),
+        "category": session_data.get("category", "general"),
+        "alpha_persona_label": session_data.get("alpha_persona_label", ""),
+        "beta_persona_label": session_data.get("beta_persona_label", ""),
+        "verdict": session_data.get("verdict", ""),
+        "resources": session_data.get("resources", []),
+        "total_rounds": session_data.get("total_rounds", 5),
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "ttl": int((now + timedelta(days=7)).timestamp()),
+    }
+
+    try:
+        table.put_item(Item=item)
+        return item
+    except Exception as e:
+        logger.error(f"Failed to create session {debate_id}: {e}")
+        raise
+
+
+def get_debate_session(debate_id: str) -> dict | None:
+    """Load a checkpointed debate session."""
+    settings = get_settings()
+    table = _get_table(settings.debates_table)
+
+    try:
+        response = table.get_item(Key={"debate_id": debate_id})
+        item = response.get("Item")
+        if item and item.get("session_type") == "checkpointed":
+            return item
+        return None
+    except Exception as e:
+        logger.error(f"Failed to load session {debate_id}: {e}")
+        return None
+
+
+def update_debate_session(debate_id: str, session_data: dict) -> dict:
+    """Update a checkpointed debate session item."""
+    settings = get_settings()
+    table = _get_table(settings.debates_table)
+    now = datetime.now(timezone.utc)
+
+    try:
+        existing = get_debate_session(debate_id)
+        if not existing:
+            raise ValueError(f"Checkpointed session {debate_id} not found")
+
+        item = {
+            **existing,
+            **session_data,
+            "debate_id": debate_id,
+            "updated_at": now.isoformat(),
+            "ttl": int((now + timedelta(days=7)).timestamp()),
+        }
+        table.put_item(Item=item)
+        return item
+    except Exception as e:
+        logger.error(f"Failed to update session {debate_id}: {e}")
+        raise
+
+
+def complete_debate_session(debate_id: str, session_data: dict) -> dict:
+    """Mark a checkpointed session complete."""
+    return update_debate_session(debate_id, {"status": "complete", **session_data})
+
+
+def create_checkin_records(records: list[dict]) -> int:
+    """Persist scheduled email check-ins in DynamoDB."""
+    settings = get_settings()
+    table = _get_table(settings.checkins_table)
+
+    try:
+        with table.batch_writer() as batch:
+            for record in records:
+                batch.put_item(Item=record)
+        return len(records)
+    except Exception as e:
+        logger.error(f"Failed to create check-in records: {e}")
+        raise
+
+
+def get_due_checkins(limit: int = 25) -> list[dict]:
+    """Query pending check-ins whose send time has arrived."""
+    settings = get_settings()
+    table = _get_table(settings.checkins_table)
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+
+    try:
+        response = table.query(
+            IndexName=CHECKINS_STATUS_INDEX,
+            KeyConditionExpression=Key("status").eq("pending") & Key("send_at").lte(now_ts),
+            Limit=min(limit, 100),
+            ScanIndexForward=True,
+        )
+        return response.get("Items", [])
+    except Exception as e:
+        logger.error(f"Failed to query due check-ins: {e}")
+        return []
+
+
+def update_checkin_record(checkin_id: str, updates: dict) -> dict:
+    """Update a scheduled check-in record."""
+    settings = get_settings()
+    table = _get_table(settings.checkins_table)
+
+    try:
+        response = table.get_item(Key={"checkin_id": checkin_id})
+        item = response.get("Item")
+        if not item:
+            raise ValueError(f"Check-in {checkin_id} not found")
+
+        item.update(updates)
+        item["updated_at"] = datetime.now(timezone.utc).isoformat()
+        table.put_item(Item=item)
+        return item
+    except Exception as e:
+        logger.error(f"Failed to update check-in {checkin_id}: {e}")
+        raise
 
 
 def save_shared_debate(share_id: str, debate_data: dict, user_input: dict) -> dict:

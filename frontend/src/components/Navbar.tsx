@@ -1,7 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { isCognitoConfigured } from "../utils/auth";
-
 export default function Navbar() {
   const navigate = useNavigate();
   const goDecide = () => navigate("/decide");
@@ -26,9 +24,7 @@ export default function Navbar() {
         </Link>
         <div className="hidden md:flex items-center space-x-8">
           <Link to="/decide" className="text-xs uppercase tracking-widest text-gray-400 hover:text-path-risk transition-colors">Decide</Link>
-          {isCognitoConfigured() && (
-            <Link to="/journal" className="text-xs uppercase tracking-widest text-gray-400 hover:text-path-risk transition-colors">Journal</Link>
-          )}
+          <Link to="/journal" className="text-xs uppercase tracking-widest text-gray-400 hover:text-path-risk transition-colors">Journal</Link>
           <Link to="/crisis" className="text-xs uppercase tracking-widest text-gray-400 hover:text-path-risk transition-colors">Crisis Resources</Link>
         </div>
         <button

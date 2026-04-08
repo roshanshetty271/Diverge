@@ -30,6 +30,11 @@ class InterjectionRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=500, description="What the user wants the agents to consider")
 
 
+class DebateSessionContinueRequest(BaseModel):
+    """Optional user interjection before the next checkpointed round."""
+    interjection: Optional[str] = Field(None, max_length=500)
+
+
 class SaveDebateRequest(BaseModel):
     """Request to save a completed debate to the journal.
 
@@ -41,6 +46,7 @@ class SaveDebateRequest(BaseModel):
 class CheckinRequest(BaseModel):
     """Request to schedule follow-up check-in emails."""
     email: str = Field(..., pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
+    debate_id: Optional[str] = Field(None, max_length=100)
     path_a: str = Field(..., max_length=200)
     path_b: str = Field(..., max_length=200)
     micro_action: str = Field("", max_length=500)
@@ -150,3 +156,29 @@ class ReflectionRequest(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     version: str
+
+
+class CapabilitiesResponse(BaseModel):
+    """Runtime capability flags exposed to the frontend."""
+    active_provider: str
+    intended_provider: str
+    openai_fallback_active: bool = False
+    bedrock_ready: bool = False
+    tts: bool = False
+    sentiment: bool = False
+    email_checkins_ready: bool = False
+    knowledge_base: bool = False
+    agentcore_memory: bool = False
+
+
+class CheckpointedDebateResponse(BaseModel):
+    """Checkpointed debate state returned after each round."""
+    status: str
+    debate_id: str
+    transcript: list[RoundResult]
+    verdict: str = ""
+    metrics: list[Optional[RoundMetrics]]
+    completed_rounds: int
+    total_rounds: int
+    resources: list[Resource] = []
+    next_round_number: Optional[int] = None

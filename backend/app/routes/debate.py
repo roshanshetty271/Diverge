@@ -16,7 +16,18 @@ import threading
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
-from app.schemas import DecisionInput, DebateResponse, InterjectionRequest
+from app.schemas import (
+    CheckpointedDebateResponse,
+    DebateResponse,
+    DebateSessionContinueRequest,
+    DecisionInput,
+    InterjectionRequest,
+)
+from app.db.dynamodb import get_debate_session, get_user_profile
+from app.orchestrator_checkpointed import (
+    continue_checkpointed_debate,
+    start_checkpointed_debate,
+)
 from app.orchestrator import run_debate, run_debate_streaming, run_debate_token_streaming, set_interjection
 from app.security.rate_limiter import check_rate_limit
 from app.security.llm_security import sanitize_writing_samples, sanitize_user_input, detect_injection
@@ -26,6 +37,49 @@ from app.config import get_settings
 
 logger = logging.getLogger("diverge.routes.debate")
 router = APIRouter(prefix="/api", tags=["debate"])
+PROFILE_FIELDS = (
+    "user_name",
+    "age",
+    "financial_context",
+    "values",
+    "risk_level",
+    "time_horizon",
+    "constraints",
+    "writing_samples",
+)
+
+
+def _hydrate_from_profile(user_context: dict, user: Optional[dict]) -> dict:
+    """Backfill missing authenticated user context from saved profile data."""
+    if not user:
+        return user_context
+
+    profile = get_user_profile(user["sub"])
+    if not profile:
+        return user_context
+
+    hydrated = dict(user_context)
+    for field in PROFILE_FIELDS:
+        current = hydrated.get(field)
+        if current not in (None, ""):
+            continue
+        profile_value = profile.get(field)
+        if profile_value not in (None, ""):
+            hydrated[field] = profile_value
+    return hydrated
+
+
+def _verify_origin(request: Request):
+    """Reject requests that bypass the intended public entrypoint."""
+    settings = get_settings()
+    if settings.origin_verify_header and settings.origin_verify_secret:
+        origin_header = request.headers.get(settings.origin_verify_header, "")
+        if origin_header != settings.origin_verify_secret:
+            logger.warning(
+                "Origin verification failed from %s",
+                request.client.host if request.client else "unknown",
+            )
+            raise HTTPException(status_code=403, detail="Access denied.")
 
 
 @router.post("/debate/start", response_model=DebateResponse)
@@ -79,7 +133,7 @@ def start_debate(
             )
 
     # 3. Sanitize all text fields
-    user_context = decision.model_dump()
+    user_context = _hydrate_from_profile(decision.model_dump(), user)
     user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
     user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
     user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
@@ -95,6 +149,109 @@ def start_debate(
     except Exception as e:
         logger.error(f"Debate failed for {user_id}: {type(e).__name__}", exc_info=False)
         raise HTTPException(status_code=500, detail="The debate could not be completed. Please try again.")
+
+
+@router.post("/debate/session/start", response_model=CheckpointedDebateResponse)
+def start_checkpointed_debate_route(
+    decision: DecisionInput,
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    """Start a checkpointed debate that pauses after each round."""
+    _verify_origin(request)
+
+    all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
+    is_crisis, crisis_cat = detect_crisis(all_text)
+    if is_crisis:
+        logger.warning(
+            "Crisis signal detected (category=%s) from %s",
+            crisis_cat,
+            request.client.host if request.client else "unknown",
+        )
+        return JSONResponse({"type": "crisis", "category": crisis_cat, "resources": CRISIS_RESOURCES})
+
+    is_blocked, block_reason = detect_blocked_topic(
+        decision.path_a,
+        decision.path_b,
+        decision.constraints or "",
+    )
+    if is_blocked:
+        raise HTTPException(status_code=400, detail=block_reason)
+
+    if user:
+        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")
+    else:
+        check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate-session")
+
+    for field_name, field_value in [("path_a", decision.path_a), ("path_b", decision.path_b)]:
+        is_suspicious, pattern = detect_injection(field_value)
+        if is_suspicious:
+            logger.warning(f"Injection detected in {field_name}: '{pattern}' from {request.client.host}")
+            raise HTTPException(
+                status_code=400,
+                detail="Your input contains patterns that can't be processed. Please rephrase.",
+            )
+
+    user_context = _hydrate_from_profile(decision.model_dump(), user)
+    user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
+    user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
+    user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+
+    user_id = user["sub"] if user else "anonymous"
+    logger.info(
+        "Starting checkpointed debate: '%s' vs '%s' by %s",
+        decision.path_a,
+        decision.path_b,
+        user_id,
+    )
+
+    try:
+        return start_checkpointed_debate(user_context, user_id=user_id)
+    except Exception as e:
+        logger.error(f"Checkpointed debate failed for {user_id}: {type(e).__name__}", exc_info=False)
+        raise HTTPException(status_code=500, detail="The debate could not be completed. Please try again.")
+
+
+@router.post("/debate/session/{debate_id}/continue", response_model=CheckpointedDebateResponse)
+def continue_checkpointed_debate_route(
+    debate_id: str,
+    body: DebateSessionContinueRequest,
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    """Resume a paused debate for exactly one more round."""
+    _verify_origin(request)
+
+    if user:
+        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")
+    else:
+        check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate-session")
+
+    session = get_debate_session(debate_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Debate session not found.")
+
+    session_user_id = session.get("user_id", "anonymous")
+    if session_user_id != "anonymous" and (not user or user.get("sub") != session_user_id):
+        raise HTTPException(status_code=403, detail="You don't have access to this debate session.")
+
+    interjection = (body.interjection or "").strip()
+    if interjection:
+        is_suspicious, _ = detect_injection(interjection)
+        if is_suspicious:
+            raise HTTPException(
+                status_code=400,
+                detail="Your input contains patterns that can't be processed.",
+            )
+        interjection = sanitize_user_input(interjection)
+
+    try:
+        return continue_checkpointed_debate(debate_id, interjection or None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception:
+        logger.error("Checkpointed continue failed for %s", debate_id, exc_info=False)
+        raise HTTPException(status_code=500, detail="The debate could not continue. Please try again.")
 
 
 @router.post("/debate/stream")
@@ -132,7 +289,7 @@ async def stream_debate(
             logger.warning(f"Injection detected in {field_name}: '{pattern}'")
             raise HTTPException(status_code=400, detail="Your input contains patterns that can't be processed.")
 
-    user_context = decision.model_dump()
+    user_context = _hydrate_from_profile(decision.model_dump(), user)
     user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
     user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
     user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
@@ -222,7 +379,7 @@ async def stream_debate_tokens(
             logger.warning(f"Injection detected in {field_name}: '{pattern}'")
             raise HTTPException(status_code=400, detail="Your input contains patterns that can't be processed.")
 
-    user_context = decision.model_dump()
+    user_context = _hydrate_from_profile(decision.model_dump(), user)
     user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
     user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
     user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")

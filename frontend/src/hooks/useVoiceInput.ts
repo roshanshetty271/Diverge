@@ -6,10 +6,7 @@ interface VoiceInputState {
   transcript: string;
 }
 
-type SpeechRecognitionEvent = Event & {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-};
+type SpeechRecognitionConstructor = new () => SpeechRecognition;
 
 export function useVoiceInput(onResult: (text: string) => void): VoiceInputState & {
   startListening: () => void;
@@ -17,13 +14,13 @@ export function useVoiceInput(onResult: (text: string) => void): VoiceInputState
 } {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
-  const recognitionRef = useRef<InstanceType<typeof SpeechRecognition> | null>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   const SpeechRecognitionAPI =
     typeof window !== "undefined"
-      ? (window as unknown as { SpeechRecognition?: typeof SpeechRecognition; webkitSpeechRecognition?: typeof SpeechRecognition })
+      ? (window as Window & { SpeechRecognition?: SpeechRecognitionConstructor; webkitSpeechRecognition?: SpeechRecognitionConstructor })
           .SpeechRecognition ||
-        (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition
+        (window as Window & { webkitSpeechRecognition?: SpeechRecognitionConstructor }).webkitSpeechRecognition
       : undefined;
 
   const isSupported = !!SpeechRecognitionAPI;

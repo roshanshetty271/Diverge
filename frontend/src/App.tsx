@@ -1,7 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Routes, Route, useLocation } from "react-router-dom";
 import ErrorBoundary from "@/components/ErrorBoundary";
-import RequireAuth from "@/components/RequireAuth";
 import Navbar from "@/components/Navbar";
 import SafetyFooter from "@/components/SafetyFooter";
 import { isCognitoConfigured } from "@/utils/auth";
@@ -53,7 +52,7 @@ export default function App() {
             <Route path="/loading" element={<Loading />} />
             <Route path="/debate" element={<Debate />} />
             <Route path="/verdict" element={<Verdict />} />
-            <Route path="/journal" element={<RequireAuth fallbackMessage="Sign in to view your Decision Journal."><Journal /></RequireAuth>} />
+            <Route path="/journal" element={<Journal />} />
             <Route path="/d/:shareId" element={<SharedDebate />} />
             <Route path="/crisis" element={<CrisisResources />} />
             <Route path="*" element={<ErrorPage />} />

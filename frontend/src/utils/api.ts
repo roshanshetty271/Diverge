@@ -1,5 +1,10 @@
 import { API_BASE, DEBATE_BASE } from "./constants";
-import type { DebateResponse, DecisionInput } from "../types";
+import type {
+  Capabilities,
+  CheckpointedDebateResponse,
+  DebateResponse,
+  DecisionInput,
+} from "../types";
 
 const DEBATE_TIMEOUT_MS = 150_000;
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -60,6 +65,33 @@ export async function getTemplates(): Promise<unknown[]> {
   return apiFetch<unknown[]>(`${API_BASE}/api/templates`);
 }
 
+export async function getCapabilities(): Promise<Capabilities> {
+  return apiFetch<Capabilities>(`${API_BASE}/api/capabilities`);
+}
+
+export async function startCheckpointedDebate(
+  input: DecisionInput,
+  signal?: AbortSignal,
+): Promise<CheckpointedDebateResponse> {
+  return apiFetch<CheckpointedDebateResponse>(`${DEBATE_BASE}/api/debate/session/start`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal,
+    _timeout: DEBATE_TIMEOUT_MS,
+  });
+}
+
+export async function continueCheckpointedDebate(
+  debateId: string,
+  interjection?: string,
+): Promise<CheckpointedDebateResponse> {
+  return apiFetch<CheckpointedDebateResponse>(`${DEBATE_BASE}/api/debate/session/${debateId}/continue`, {
+    method: "POST",
+    body: JSON.stringify({ interjection: interjection || null }),
+    _timeout: DEBATE_TIMEOUT_MS,
+  });
+}
+
 export interface JournalResponse {
   items: Record<string, unknown>[];
   last_key?: Record<string, string>;
@@ -81,6 +113,7 @@ export async function saveDebate(debateData: Record<string, unknown>, token?: st
 
 export interface CheckinPayload {
   email: string;
+  debate_id?: string;
   path_a: string;
   path_b: string;
   micro_action: string;

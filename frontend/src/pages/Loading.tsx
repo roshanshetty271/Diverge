@@ -7,8 +7,23 @@ import RoundCounter from "../components/RoundCounter";
 import FactRotator from "../components/FactRotator";
 import CancelButton from "../components/CancelButton";
 import { startDebateStream, subscribeDebate, getDebateStream, resetDebateStream } from "../utils/debateStream";
+import { startCheckpointedDebate } from "../utils/api";
+import { storeDebateState } from "../utils/debateStorage";
 import { calculateProgress } from "../utils/loadingHelpers";
-import type { DecisionInput } from "../types";
+import { CHECKPOINTED_DEBATE_ENABLED } from "../utils/constants";
+import type { CheckpointedDebateResponse, DecisionInput, DebateResponse } from "../types";
+
+function toDebateResponse(result: CheckpointedDebateResponse): DebateResponse {
+  return {
+    debate_id: result.debate_id,
+    transcript: result.transcript,
+    verdict: result.verdict || "",
+    metrics: result.metrics,
+    completed_rounds: result.completed_rounds,
+    total_rounds: result.total_rounds,
+    resources: result.resources || [],
+  };
+}
 
 export default function Loading() {
   const location = useLocation();
@@ -20,8 +35,11 @@ export default function Loading() {
   const [error, setError] = useState<string | null>(null);
   const hasFired = useRef(false);
   const hasNavigated = useRef(false);
+  const checkpointedAbort = useRef<AbortController | null>(null);
 
   const handleCancel = () => {
+    checkpointedAbort.current?.abort();
+    checkpointedAbort.current = null;
     resetDebateStream();
     navigate("/decide", { replace: true });
   };
@@ -32,7 +50,48 @@ export default function Loading() {
     if (!hasFired.current) {
       hasFired.current = true;
       resetDebateStream();
-      startDebateStream(payload);
+      if (CHECKPOINTED_DEBATE_ENABLED) {
+        checkpointedAbort.current = new AbortController();
+        void startCheckpointedDebate(payload, checkpointedAbort.current.signal)
+          .then((result) => {
+            const maybeCrisis = result as unknown as { type?: string };
+            if (maybeCrisis.type === "crisis" && !hasNavigated.current) {
+              hasNavigated.current = true;
+              navigate("/crisis", { replace: true });
+              return;
+            }
+
+            const debate = toDebateResponse(result);
+            storeDebateState(debate, payload);
+            setRoundCount(debate.transcript.length);
+
+            if (!hasNavigated.current) {
+              hasNavigated.current = true;
+              navigate("/debate", {
+                replace: true,
+                state: { debate, input: payload },
+              });
+            }
+          })
+          .catch((err) => {
+            if (
+              err instanceof Error &&
+              (err.name === "AbortError" || err.message === "Request was cancelled.")
+            ) {
+              return;
+            }
+            setError(err instanceof Error ? err.message : "Something went wrong.");
+          })
+          .finally(() => {
+            checkpointedAbort.current = null;
+          });
+      } else {
+        startDebateStream(payload);
+      }
+    }
+
+    if (CHECKPOINTED_DEBATE_ENABLED) {
+      return () => {};
     }
 
     const unsub = subscribeDebate(() => {

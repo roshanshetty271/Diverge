@@ -9,6 +9,7 @@ interface Props {
   variant?: "safe" | "risk";
   voiceId?: string;
   streaming?: boolean;
+  ttsEnabled?: boolean;
 }
 
 const CHARS_PER_TICK = 3;
@@ -33,7 +34,7 @@ function cleanSlop(text: string): string {
   return t.replace(/ {2,}/g, " ").trim();
 }
 
-export default function AgentMessage({ agentName, message, variant = "safe", voiceId, streaming }: Props) {
+export default function AgentMessage({ agentName, message, variant = "safe", voiceId, streaming, ttsEnabled = true }: Props) {
   const isSafe = variant === "safe";
   const borderColor = isSafe ? "border-l-path-safe" : "border-r-path-risk";
   const accentText = isSafe ? "text-path-safe" : "text-path-risk";
@@ -107,7 +108,7 @@ export default function AgentMessage({ agentName, message, variant = "safe", voi
         <div>
           <div className={`flex items-center gap-2 mb-1.5 ${isSafe ? "" : "justify-end"}`}>
             <span className={`${accentText} text-xs font-medium font-body`}>{agentName}</span>
-            {voiceId && !streaming && (
+            {ttsEnabled && voiceId && !streaming && (
               <button
                 onClick={handleSpeak}
                 className={`${accentText} opacity-60 hover:opacity-100 transition-opacity cursor-pointer`}

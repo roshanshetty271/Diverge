@@ -1,14 +1,14 @@
-"""Email routes — check-in reminders and results emails via AWS SES.
-
-Sends follow-up emails at Day 7, 30, and 90 after a debate.
-Also supports emailing debate results + resource recommendations.
-Falls back gracefully when SES is not configured.
-"""
+"""Email routes and scheduled check-in processing via AWS SES."""
 
 import logging
+import uuid
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, HTTPException
-from app.schemas import CheckinRequest, EmailResultsRequest
+
 from app.config import get_settings
+from app.db.dynamodb import create_checkin_records, get_due_checkins, update_checkin_record
+from app.schemas import CheckinRequest, EmailResultsRequest
 
 logger = logging.getLogger("diverge.routes.email")
 router = APIRouter(prefix="/api", tags=["email"])
@@ -16,12 +16,12 @@ router = APIRouter(prefix="/api", tags=["email"])
 CHECKIN_SCHEDULE = [
     {
         "day": 7,
-        "subject": "Did you do it? — Your Diverge check-in",
+        "subject": "Did you do it? - Your Diverge check-in",
         "template": "day7",
     },
     {
         "day": 30,
-        "subject": "30 days later — how's the path?",
+        "subject": "30 days later - how's the path?",
         "template": "day30",
     },
     {
@@ -32,45 +32,53 @@ CHECKIN_SCHEDULE = [
 ]
 
 
-def _build_email_body(req: CheckinRequest, schedule_entry: dict) -> str:
-    name = req.user_name or "there"
+def _build_email_body(payload: dict, schedule_entry: dict) -> str:
+    name = payload.get("user_name") or "there"
     day = schedule_entry["day"]
+    micro_action = payload.get("micro_action") or ""
+    path_a = payload.get("path_a") or "Option A"
+    path_b = payload.get("path_b") or "Option B"
 
     if day == 7:
-        body_intro = f"7 days ago, you debated:"
-        body_nudge = (
-            f'Your next move was:\n"{req.micro_action}"\n\n'
-            "Did you take the step?\n\n"
-            "If yes — you already know it was worth it.\n"
-            "If not — the debate is still saved. You can revisit it anytime."
-            if req.micro_action
-            else "Did you make a move?\n\nIf yes — you already know it was worth it.\nIf not — the debate is still saved."
-        )
+        body_intro = "7 days ago, you debated:"
+        if micro_action:
+            body_nudge = (
+                f'Your next move was:\n"{micro_action}"\n\n'
+                "Did you take the step?\n\n"
+                "If yes - you already know it was worth it.\n"
+                "If not - the debate is still saved. You can revisit it anytime."
+            )
+        else:
+            body_nudge = (
+                "Did you make a move?\n\n"
+                "If yes - you already know it was worth it.\n"
+                "If not - the debate is still saved."
+            )
     elif day == 30:
-        body_intro = f"30 days ago, you debated:"
+        body_intro = "30 days ago, you debated:"
         body_nudge = (
             "A month in. Is the path unfolding the way the debate predicted?\n\n"
             "What surprised you? What hasn't changed yet?\n\n"
-            "Change takes 66 days on average. You're halfway there."
+            "Change takes time. You are living the version of yourself you argued for."
         )
     else:
-        body_intro = f"90 days ago, you debated:"
+        body_intro = "90 days ago, you debated:"
         body_nudge = (
             "Three months. Enough time to know.\n\n"
             "Would you make the same choice again?\n\n"
-            "If the answer is yes — the debate did its job.\n"
-            "If the answer is no — you have new information now. That's not failure. That's growth."
+            "If the answer is yes - the debate did its job.\n"
+            "If the answer is no - you have new information now. That is not failure. That is growth."
         )
 
     return (
         f"Hey {name},\n\n"
         f"{body_intro}\n"
-        f'"{req.path_a}" vs "{req.path_b}"\n\n'
+        f'"{path_a}" vs "{path_b}"\n\n'
         f"{body_nudge}\n\n"
         "---\n"
         "Sic Mundus Creatus Est.\n"
         "Thus your world is created.\n\n"
-        "— Diverge"
+        "- Diverge"
     )
 
 
@@ -78,11 +86,12 @@ def _send_ses_email(to: str, subject: str, body: str) -> bool:
     """Send a plain-text email via SES. Returns True on success."""
     settings = get_settings()
     if not settings.ses_sender_email:
-        logger.info(f"SES not configured, would send to {to}: {subject}")
+        logger.info("SES not configured, would send to %s: %s", to, subject)
         return False
 
     try:
         import boto3
+
         client = boto3.client("ses", region_name=settings.ses_region)
         client.send_email(
             Source=settings.ses_sender_email,
@@ -92,54 +101,139 @@ def _send_ses_email(to: str, subject: str, body: str) -> bool:
                 "Body": {"Text": {"Data": body, "Charset": "UTF-8"}},
             },
         )
-        logger.info(f"SES email sent to {to}: {subject}")
+        logger.info("SES email sent to %s: %s", to, subject)
         return True
     except Exception as e:
-        logger.warning(f"SES send failed for {to}: {e}")
+        logger.warning("SES send failed for %s: %s", to, e)
         return False
+
+
+def _build_checkin_record(req: CheckinRequest, schedule_entry: dict) -> dict:
+    now = datetime.now(timezone.utc)
+    send_at = now + timedelta(days=schedule_entry["day"])
+
+    return {
+        "checkin_id": uuid.uuid4().hex,
+        "debate_id": req.debate_id or "",
+        "email": req.email,
+        "user_name": req.user_name,
+        "path_a": req.path_a,
+        "path_b": req.path_b,
+        "micro_action": req.micro_action,
+        "template": schedule_entry["template"],
+        "subject": schedule_entry["subject"],
+        "send_at": int(send_at.timestamp()),
+        "status": "pending",
+        "attempts": 0,
+        "last_error": "",
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "ttl": int((send_at + timedelta(days=180)).timestamp()),
+    }
 
 
 @router.post("/checkin")
 def schedule_checkin(req: CheckinRequest):
-    """Schedule 3 check-in reminder emails (Day 7, 30, 90).
-
-    Sends the Day 7 email immediately via SES. Day 30 and 90 are stored
-    for a scheduled Lambda to process (or sent immediately as "open later"
-    emails for the competition demo).
-    """
-    sent_count = 0
-    failed_count = 0
-
-    for entry in CHECKIN_SCHEDULE:
-        body = _build_email_body(req, entry)
-        ok = _send_ses_email(req.email, entry["subject"], body)
-        if ok:
-            sent_count += 1
-        else:
-            failed_count += 1
-
-    if sent_count > 0:
-        return {
-            "status": "scheduled",
-            "emails_sent": sent_count,
-            "message": f"Check-in emails sent to {req.email}",
-        }
-
-    if failed_count == len(CHECKIN_SCHEDULE):
-        logger.info(f"SES not available. Check-in logged for {req.email}")
+    """Schedule 3 delayed check-in reminder emails (Day 7, 30, 90)."""
+    settings = get_settings()
+    if not (
+        settings.ses_sender_email
+        and settings.checkins_table
+        and settings.checkins_scheduler_enabled
+    ):
+        logger.info("Check-in scheduling unavailable for %s", req.email)
         return {
             "status": "logged",
             "emails_sent": 0,
-            "message": "Check-in saved. Emails will be sent when SES is configured.",
+            "message": "Email scheduling is not active right now.",
         }
 
-    raise HTTPException(status_code=500, detail="Failed to schedule check-in emails.")
+    try:
+        records = [_build_checkin_record(req, entry) for entry in CHECKIN_SCHEDULE]
+        scheduled_count = create_checkin_records(records)
+        return {
+            "status": "scheduled",
+            "emails_sent": 0,
+            "scheduled_count": scheduled_count,
+            "message": f"Check-in emails scheduled for {req.email}",
+        }
+    except Exception as e:
+        logger.error("Failed to schedule check-ins for %s: %s", req.email, e)
+        raise HTTPException(status_code=500, detail="Failed to schedule check-in emails.") from e
+
+
+def process_due_checkins(limit: int = 25) -> dict:
+    """Process scheduled check-ins whose send time has arrived."""
+    now = datetime.now(timezone.utc)
+    due_items = get_due_checkins(limit=limit)
+    sent = 0
+    retried = 0
+    failed = 0
+
+    for item in due_items:
+        schedule_entry = next(
+            (entry for entry in CHECKIN_SCHEDULE if entry["template"] == item.get("template")),
+            None,
+        )
+        if not schedule_entry:
+            update_checkin_record(
+                item["checkin_id"],
+                {"status": "failed", "last_error": "Unknown template"},
+            )
+            failed += 1
+            continue
+
+        body = _build_email_body(item, schedule_entry)
+        ok = _send_ses_email(item["email"], item["subject"], body)
+
+        if ok:
+            update_checkin_record(
+                item["checkin_id"],
+                {
+                    "status": "sent",
+                    "sent_at": now.isoformat(),
+                    "last_error": "",
+                },
+            )
+            sent += 1
+            continue
+
+        attempts = int(item.get("attempts", 0)) + 1
+        if attempts >= 3:
+            update_checkin_record(
+                item["checkin_id"],
+                {
+                    "status": "failed",
+                    "attempts": attempts,
+                    "last_error": "SES send failed",
+                },
+            )
+            failed += 1
+        else:
+            retry_at = now + timedelta(hours=6)
+            update_checkin_record(
+                item["checkin_id"],
+                {
+                    "status": "pending",
+                    "attempts": attempts,
+                    "send_at": int(retry_at.timestamp()),
+                    "last_error": "SES send failed",
+                },
+            )
+            retried += 1
+
+    return {
+        "checked": len(due_items),
+        "sent": sent,
+        "retried": retried,
+        "failed": failed,
+    }
 
 
 def _build_results_email(req: EmailResultsRequest) -> str:
     """Build a plain-text results email with verdict and resources."""
     lines = [
-        f"Your Diverge Decision: \"{req.path_a}\" vs \"{req.path_b}\"",
+        f'Your Diverge Decision: "{req.path_a}" vs "{req.path_b}"',
         "=" * 50,
         "",
     ]
@@ -159,30 +253,29 @@ def _build_results_email(req: EmailResultsRequest) -> str:
             author = r.get("author", "")
             why = r.get("why", "")
             url = r.get("url", "")
-            lines.append(f"[{r_type}] {title} — {author}")
+            lines.append(f"[{r_type}] {title} - {author}")
             if why:
                 lines.append(f"  {why}")
             if url:
                 lines.append(f"  {url}")
             lines.append("")
 
-    lines.extend([
-        "---",
-        "Sic Mundus Creatus Est.",
-        "Thus your world is created.",
-        "",
-        "— Diverge",
-    ])
+    lines.extend(
+        [
+            "---",
+            "Sic Mundus Creatus Est.",
+            "Thus your world is created.",
+            "",
+            "- Diverge",
+        ]
+    )
 
     return "\n".join(lines)
 
 
 @router.post("/email-results")
 def send_results_email(req: EmailResultsRequest):
-    """Email debate results and resource recommendations to the user.
-
-    Falls back to returning structured content for clipboard copy if SES unavailable.
-    """
+    """Email debate results and resource recommendations to the user."""
     body = _build_results_email(req)
     subject = f"Your Diverge Decision: {req.path_a} vs {req.path_b}"
 

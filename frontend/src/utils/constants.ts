@@ -25,10 +25,10 @@ export const TEMPLATES: TemplateOption[] = [
 
 export const ROUNDS: RoundInfo[] = [
   { name: "The Fork", title: "Year 1: The Aftermath", description: "What happened in the first year after you chose." },
-  { name: "The Reality", title: "Year 2-3: The Reality Check", description: "The honeymoon is over. What's the real cost?" },
-  { name: "The Stranger", title: "Year 5: Who You Became", description: "Five years in. You're a different person now." },
-  { name: "The Loop", title: "Year 10: The Regret Test", description: "A full decade. What did this path cost you?" },
-  { name: "The Knot", title: "Final Words", description: "One last chance to make their case." },
+  { name: "The Ledger", title: "Year 2-3: The Ledger", description: "The honeymoon is over. What does this path actually cost?" },
+  { name: "The Mirror", title: "Year 5: The Mirror", description: "Five years in. Who have you become on this path?" },
+  { name: "The Ghost", title: "Year 10: The Ghost", description: "A full decade later. What still haunts or anchors you?" },
+  { name: "The Knot", title: "Final Words: The Knot", description: "One last chance to make their case." },
 ];
 
 export const VALUES: string[] = [
@@ -50,3 +50,5 @@ export const API_BASE: string = import.meta.env.VITE_API_URL || "";
 // Debate uses a separate Lambda Function URL (5-min timeout vs API Gateway's 29s)
 // Falls back to API_BASE when served behind CloudFront (which proxies both)
 export const DEBATE_BASE: string = import.meta.env.VITE_DEBATE_URL || API_BASE;
+
+export const CHECKPOINTED_DEBATE_ENABLED: boolean = import.meta.env.VITE_CHECKPOINTED_DEBATE === "true";
