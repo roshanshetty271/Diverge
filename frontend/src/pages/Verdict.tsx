@@ -536,6 +536,7 @@ export default function Verdict() {
                       href={resource.url} 
                       target="_blank" 
                       rel="noopener noreferrer"
+                      referrerPolicy="no-referrer"
                       className="block"
                     >
                       {card}

@@ -97,13 +97,8 @@ def start_debate(
     Security: Enhanced fingerprinting combines IP + User-Agent + Accept-Language
     to make abuse harder while maintaining seamless UX for legitimate users.
     """
-    # 0. Origin verification — reject requests that didn't come through CloudFront
-    settings = get_settings()
-    if settings.origin_verify_header and settings.origin_verify_secret:
-        origin_header = request.headers.get(settings.origin_verify_header, "")
-        if origin_header != settings.origin_verify_secret:
-            logger.warning(f"Origin verification failed from {request.client.host if request.client else 'unknown'}")
-            raise HTTPException(status_code=403, detail="Access denied.")
+    # 0. Origin verification — enabled only when a trusted edge proxy is available
+    _verify_origin(request)
 
     # 0b. Content safety — runs BEFORE rate limiting so blocked requests don't count
     all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
@@ -118,8 +113,10 @@ def start_debate(
 
     # 1. Rate limiting — tighter for anonymous, generous for authenticated
     if user:
-        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")
+        check_rate_limit(request, max_requests=4, window_seconds=600, endpoint="debate:burst", identity=f"user:{user['sub']}")
+        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint="debate", identity=f"user:{user['sub']}")
     else:
+        check_rate_limit(request, max_requests=2, window_seconds=600, endpoint="debate:burst")
         check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate")
 
     # 2. Check decision paths for injection
@@ -179,8 +176,10 @@ def start_checkpointed_debate_route(
         raise HTTPException(status_code=400, detail=block_reason)
 
     if user:
-        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")
+        check_rate_limit(request, max_requests=4, window_seconds=600, endpoint="debate-session:burst", identity=f"user:{user['sub']}")
+        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint="debate-session", identity=f"user:{user['sub']}")
     else:
+        check_rate_limit(request, max_requests=2, window_seconds=600, endpoint="debate-session:burst")
         check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate-session")
 
     for field_name, field_value in [("path_a", decision.path_a), ("path_b", decision.path_b)]:
@@ -223,9 +222,9 @@ def continue_checkpointed_debate_route(
     _verify_origin(request)
 
     if user:
-        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")
+        check_rate_limit(request, max_requests=30, window_seconds=3600, endpoint="debate-continue", identity=f"user:{user['sub']}")
     else:
-        check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate-session")
+        check_rate_limit(request, max_requests=15, window_seconds=3600, endpoint="debate-continue")
 
     session = get_debate_session(debate_id)
     if not session:
@@ -261,11 +260,7 @@ async def stream_debate(
     user: Optional[dict] = Depends(get_current_user),
 ):
     """Stream debate rounds via SSE as each round completes."""
-    settings = get_settings()
-    if settings.origin_verify_header and settings.origin_verify_secret:
-        origin_header = request.headers.get(settings.origin_verify_header, "")
-        if origin_header != settings.origin_verify_secret:
-            raise HTTPException(status_code=403, detail="Access denied.")
+    _verify_origin(request)
 
     # Content safety — before rate limiting
     all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
@@ -279,9 +274,11 @@ async def stream_debate(
         raise HTTPException(status_code=400, detail=block_reason)
 
     if user:
-        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")
+        check_rate_limit(request, max_requests=4, window_seconds=600, endpoint="debate-stream:burst", identity=f"user:{user['sub']}")
+        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint="debate-stream", identity=f"user:{user['sub']}")
     else:
-        check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate")
+        check_rate_limit(request, max_requests=2, window_seconds=600, endpoint="debate-stream:burst")
+        check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate-stream")
 
     for field_name, field_value in [("path_a", decision.path_a), ("path_b", decision.path_b)]:
         is_suspicious, pattern = detect_injection(field_value)
@@ -325,12 +322,16 @@ async def stream_debate(
 
 
 @router.post("/debate/interject")
-def interject_debate(req: InterjectionRequest):
+def interject_debate(req: InterjectionRequest, request: Request):
     """Submit a user interjection to be included in the next debate round.
 
     The interjection is picked up by the streaming orchestrator between rounds,
     influencing both agents' arguments in the following round.
     """
+    _verify_origin(request)
+    check_rate_limit(request, max_requests=10, window_seconds=300, endpoint="interject:burst")
+    check_rate_limit(request, max_requests=60, window_seconds=3600, endpoint="interject")
+
     is_suspicious, pattern = detect_injection(req.text)
     if is_suspicious:
         raise HTTPException(status_code=400, detail="Your input contains patterns that can't be processed.")
@@ -352,11 +353,7 @@ async def stream_debate_tokens(
     Yields individual tokens as agents generate them, enabling
     real-time typewriter effect in the UI.
     """
-    settings = get_settings()
-    if settings.origin_verify_header and settings.origin_verify_secret:
-        origin_header = request.headers.get(settings.origin_verify_header, "")
-        if origin_header != settings.origin_verify_secret:
-            raise HTTPException(status_code=403, detail="Access denied.")
+    _verify_origin(request)
 
     all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
     is_crisis, crisis_cat = detect_crisis(all_text)
@@ -369,9 +366,11 @@ async def stream_debate_tokens(
         raise HTTPException(status_code=400, detail=block_reason)
 
     if user:
-        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint=f"user:{user['sub']}")
+        check_rate_limit(request, max_requests=4, window_seconds=600, endpoint="debate-token-stream:burst", identity=f"user:{user['sub']}")
+        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint="debate-token-stream", identity=f"user:{user['sub']}")
     else:
-        check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate")
+        check_rate_limit(request, max_requests=2, window_seconds=600, endpoint="debate-token-stream:burst")
+        check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate-token-stream")
 
     for field_name, field_value in [("path_a", decision.path_a), ("path_b", decision.path_b)]:
         is_suspicious, pattern = detect_injection(field_value)

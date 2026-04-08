@@ -22,6 +22,10 @@ async function apiFetch<T>(url: string, options: FetchOptions = {}): Promise<T> 
   try {
     const res = await fetch(url, {
       ...options,
+      credentials: "omit",
+      mode: "cors",
+      redirect: "error",
+      referrerPolicy: "strict-origin-when-cross-origin",
       signal,
       headers: { "Content-Type": "application/json", ...options.headers },
     });

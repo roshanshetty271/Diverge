@@ -94,6 +94,10 @@ async function speakWithPolly(text: string, voiceId: string, gen: number, callba
   try {
     const res = await fetch(`${DEBATE_BASE}/api/tts`, {
       method: "POST",
+      credentials: "omit",
+      mode: "cors",
+      redirect: "error",
+      referrerPolicy: "strict-origin-when-cross-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, voice_id: voiceId }),
       signal: controller.signal,

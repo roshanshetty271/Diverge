@@ -18,6 +18,7 @@ Globals:
         DIVERGE_OPENAI_API_KEY: !Ref OpenAIApiKey
         DIVERGE_COMPREHEND_ENABLED: !Ref EnableComprehend
         DIVERGE_DEBUG: "false"
+        DIVERGE_PUBLIC_APP_URL: !Ref PublicAppUrl
 
 Parameters:
   Stage:
@@ -46,9 +47,13 @@ Parameters:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
+  PublicAppUrl:
+    Type: String
+    Default: ""
 
 Conditions:
   CreateCloudFront: !Equals [!Ref EnableCloudFront, "true"]
+  HasPublicAppUrl: !Not [!Equals [!Ref PublicAppUrl, ""]]
 
 Resources:
   # ── Cognito ────────────────────────────────────────────────────
@@ -88,8 +93,10 @@ Resources:
       AllowedOAuthFlowsUserPoolClient: true
       CallbackURLs:
         - http://localhost:5173
+        - !If [HasPublicAppUrl, !Ref PublicAppUrl, !Ref "AWS::NoValue"]
       LogoutURLs:
         - http://localhost:5173
+        - !If [HasPublicAppUrl, !Ref PublicAppUrl, !Ref "AWS::NoValue"]
       SupportedIdentityProviders: [COGNITO]
 
   UserPoolDomain:
@@ -180,7 +187,9 @@ Resources:
       FunctionUrlConfig:
         AuthType: NONE
         Cors:
-          AllowOrigins: ["*"]
+          AllowOrigins:
+            - http://localhost:5173
+            - !If [HasPublicAppUrl, !Ref PublicAppUrl, !Ref "AWS::NoValue"]
           AllowMethods: ["POST"]
           AllowHeaders: ["Content-Type", "Authorization"]
       Environment:
@@ -189,8 +198,8 @@ Resources:
           DIVERGE_USERS_TABLE: !Ref UsersTable
           DIVERGE_COGNITO_USER_POOL_ID: !Ref UserPool
           DIVERGE_COGNITO_CLIENT_ID: !Ref UserPoolClient
-          DIVERGE_ORIGIN_VERIFY_HEADER: "x-origin-verify"
-          DIVERGE_ORIGIN_VERIFY_SECRET: !Sub "diverge-${AWS::AccountId}-origin-secret"
+          DIVERGE_ORIGIN_VERIFY_HEADER: !If [CreateCloudFront, "x-origin-verify", ""]
+          DIVERGE_ORIGIN_VERIFY_SECRET: !If [CreateCloudFront, !Sub "diverge-${AWS::AccountId}-origin-secret", ""]
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DebatesTable
@@ -431,6 +440,16 @@ Resources:
             OriginAccessControlId: !GetAtt CloudFrontOAC.Id
             S3OriginConfig:
               OriginAccessIdentity: ""
+          - Id: DebateOrigin
+            DomainName: !Select
+              - 2
+              - !Split ["/", !GetAtt DebateFunctionUrl.FunctionUrl]
+            OriginCustomHeaders:
+              - HeaderName: x-origin-verify
+                HeaderValue: !Sub "diverge-${AWS::AccountId}-origin-secret"
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
           - Id: ApiOrigin
             DomainName: !Sub "${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
             OriginPath: !Sub "/${Stage}"
@@ -444,6 +463,12 @@ Resources:
           AllowedMethods: [GET, HEAD]
           CachedMethods: [GET, HEAD]
         CacheBehaviors:
+          - PathPattern: "/api/debate/*"
+            TargetOriginId: DebateOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
           - PathPattern: "/api/*"
             TargetOriginId: ApiOrigin
             ViewerProtocolPolicy: redirect-to-https

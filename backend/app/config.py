@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     cognito_client_id: str = ""
 
     # CORS — production CloudFront URL added via env var
-    cloudfront_url: str = ""
+    public_app_url: str = ""
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     # Rate limiting
@@ -89,8 +89,8 @@ class Settings(BaseSettings):
     def get_all_cors_origins(self) -> list[str]:
         """Return CORS origins including CloudFront URL if configured."""
         origins = list(self.cors_origins)
-        if self.cloudfront_url and self.cloudfront_url not in origins:
-            origins.append(self.cloudfront_url)
+        if self.public_app_url and self.public_app_url not in origins:
+            origins.append(self.public_app_url)
         return origins
 
 

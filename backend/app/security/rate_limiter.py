@@ -3,7 +3,7 @@
 Kiro audit fixes:
 - #10: DynamoDB-based instead of in-memory (persists across Lambda cold starts)
 - #12.1: Fail-closed on errors (deny on DB failure, not allow)
-- #10.2: X-Forwarded-For validated against CloudFront-only trusted proxies
+- #10.2: avoid trusting spoofable forwarding headers on public endpoints
 """
 
 import time
@@ -25,22 +25,15 @@ _fallback_log: dict[str, list[float]] = {}
 
 
 def _get_client_ip(request: Request) -> str:
-    """Extract real client IP, validating X-Forwarded-For.
+    """Extract a stable client fingerprint without trusting spoofable headers.
 
-    Kiro audit #10.2: Don't blindly trust X-Forwarded-For.
-    Only trust it if request came through CloudFront (which always sets it).
-    
-    Enhanced fingerprinting: Combines IP + User-Agent + Accept-Language
-    to make IP rotation attacks harder without affecting legitimate users.
+    Vercel/AWS already terminates TLS and forwards the real client address into
+    `request.client.host`. Browsers cannot set that value directly, while tools
+    like curl can spoof `X-Forwarded-For` against public endpoints. For a public
+    app, it's safer to ignore forwarding headers unless a trusted proxy layer is
+    explicitly enforcing them.
     """
-    # CloudFront always sets X-Forwarded-For as: client_ip, cloudfront_ip
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        # Take the FIRST IP (client IP set by CloudFront)
-        # In direct Lambda Function URL access, this could be spoofed,
-        # but API Gateway/CloudFront always overwrites it
-        ip = forwarded.split(",")[0].strip()
-    elif request.client and request.client.host:
+    if request.client and request.client.host:
         ip = request.client.host
     else:
         ip = "unknown"
@@ -124,6 +117,7 @@ def check_rate_limit(
     max_requests: int = 5,
     window_seconds: int = 3600,
     endpoint: str = "default",
+    identity: str | None = None,
 ) -> None:
     """Check if the client has exceeded the rate limit.
 
@@ -131,7 +125,8 @@ def check_rate_limit(
     Implements exponential backoff for repeated violations.
     Raises HTTPException 429 if limit exceeded.
     """
-    client_key = f"{_get_client_ip(request)}:{endpoint}"
+    subject = identity or _get_client_ip(request)
+    client_key = f"{subject}:{endpoint}"
 
     settings = get_settings()
 

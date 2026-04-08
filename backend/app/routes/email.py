@@ -4,11 +4,12 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.config import get_settings
 from app.db.dynamodb import create_checkin_records, get_due_checkins, update_checkin_record
 from app.schemas import CheckinRequest, EmailResultsRequest
+from app.security.rate_limiter import check_rate_limit
 
 logger = logging.getLogger("diverge.routes.email")
 router = APIRouter(prefix="/api", tags=["email"])
@@ -133,8 +134,10 @@ def _build_checkin_record(req: CheckinRequest, schedule_entry: dict) -> dict:
 
 
 @router.post("/checkin")
-def schedule_checkin(req: CheckinRequest):
+def schedule_checkin(req: CheckinRequest, request: Request):
     """Schedule 3 delayed check-in reminder emails (Day 7, 30, 90)."""
+    check_rate_limit(request, max_requests=2, window_seconds=900, endpoint="checkin:burst")
+    check_rate_limit(request, max_requests=6, window_seconds=3600, endpoint="checkin")
     settings = get_settings()
     if not (
         settings.ses_sender_email
@@ -274,8 +277,10 @@ def _build_results_email(req: EmailResultsRequest) -> str:
 
 
 @router.post("/email-results")
-def send_results_email(req: EmailResultsRequest):
+def send_results_email(req: EmailResultsRequest, request: Request):
     """Email debate results and resource recommendations to the user."""
+    check_rate_limit(request, max_requests=3, window_seconds=900, endpoint="email-results:burst")
+    check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint="email-results")
     body = _build_results_email(req)
     subject = f"Your Diverge Decision: {req.path_a} vs {req.path_b}"
 

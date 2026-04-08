@@ -1,9 +1,11 @@
 """Text-to-speech route using Amazon Polly with Neural voices."""
 
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+
+from app.security.rate_limiter import check_rate_limit
 
 logger = logging.getLogger("diverge.routes.tts")
 router = APIRouter(prefix="/api", tags=["tts"])
@@ -33,12 +35,15 @@ def _wrap_ssml(text: str) -> str:
 
 
 @router.post("/tts")
-def synthesize_speech(req: TTSRequest):
+def synthesize_speech(req: TTSRequest, request: Request):
     """Synthesize speech from text using Amazon Polly Neural engine.
 
     Supports plain text and SSML for richer prosody control.
     Returns audio/mpeg stream. Frontend plays it directly via Audio element.
     """
+    check_rate_limit(request, max_requests=10, window_seconds=300, endpoint="tts:burst")
+    check_rate_limit(request, max_requests=40, window_seconds=3600, endpoint="tts")
+
     if req.voice_id not in VALID_VOICES:
         req.voice_id = "Matthew"
 

@@ -1,5 +1,23 @@
 import type { DarkQuoteItem, TemplateOption, RoundInfo } from "../types";
 
+function normalizeServiceUrl(value: string | undefined): string {
+  if (!value) return "";
+
+  try {
+    const url = new URL(value);
+    const isHttps = url.protocol === "https:";
+    const isLocalHttp = url.protocol === "http:" && /^localhost$|^127(?:\.\d{1,3}){3}$/.test(url.hostname);
+
+    if (!isHttps && !isLocalHttp) {
+      return "";
+    }
+
+    return url.href.replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
 export const DARK_QUOTES: DarkQuoteItem[] = [
   { text: "Everything is connected.", source: "Dark" },
   { text: "Every decision for something is a decision against something else.", source: "Dark" },
@@ -45,10 +63,10 @@ export const CRISIS_RESOURCES = [
 
 // In dev, Vite proxy handles /api/* → localhost:8000 (see vite.config.ts)
 // In prod, VITE_API_URL points to CloudFront or API Gateway
-export const API_BASE: string = import.meta.env.VITE_API_URL || "";
+export const API_BASE: string = normalizeServiceUrl(import.meta.env.VITE_API_URL);
 
 // Debate uses a separate Lambda Function URL (5-min timeout vs API Gateway's 29s)
 // Falls back to API_BASE when served behind CloudFront (which proxies both)
-export const DEBATE_BASE: string = import.meta.env.VITE_DEBATE_URL || API_BASE;
+export const DEBATE_BASE: string = normalizeServiceUrl(import.meta.env.VITE_DEBATE_URL) || API_BASE;
 
 export const CHECKPOINTED_DEBATE_ENABLED: boolean = import.meta.env.VITE_CHECKPOINTED_DEBATE === "true";

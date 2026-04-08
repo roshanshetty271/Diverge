@@ -5,7 +5,7 @@ import uuid
 import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.config import get_settings
 from app.db.dynamodb import (
@@ -27,6 +27,7 @@ from app.schemas import (
 )
 from app.security.cognito import require_auth
 from app.security.llm_security import sanitize_user_input, sanitize_writing_samples
+from app.security.rate_limiter import check_rate_limit
 
 logger = logging.getLogger("diverge.routes.general")
 router = APIRouter(prefix="/api", tags=["general"])
@@ -44,8 +45,10 @@ TEMPLATES = [
 
 
 @router.get("/templates", response_model=list[TemplateResponse])
-def get_templates():
+def get_templates(request: Request):
     """Return decision templates for the template picker."""
+    check_rate_limit(request, max_requests=60, window_seconds=300, endpoint="templates:burst")
+    check_rate_limit(request, max_requests=500, window_seconds=3600, endpoint="templates")
     return TEMPLATES
 
 
@@ -105,8 +108,10 @@ def _sanitize_persisted_input(input_data: dict) -> dict:
 
 
 @router.get("/capabilities", response_model=CapabilitiesResponse)
-def get_capabilities():
+def get_capabilities(request: Request):
     """Expose truthful runtime capability flags to the frontend."""
+    check_rate_limit(request, max_requests=30, window_seconds=300, endpoint="capabilities:burst")
+    check_rate_limit(request, max_requests=240, window_seconds=3600, endpoint="capabilities")
     settings = get_settings()
     bedrock_ready = _service_check("bedrock", settings, call="bedrock")
     tts_ready = _service_check("polly", settings, call="polly")
@@ -130,6 +135,7 @@ def get_capabilities():
 
 @router.post("/debate/save")
 def save_debate_route(
+    request: Request,
     body: SaveDebateRequest,
     user: dict = Depends(require_auth),
 ):
@@ -139,6 +145,8 @@ def save_debate_route(
 
     if not debate_data.get("debate_id"):
         raise HTTPException(status_code=400, detail="Missing debate_id in debate_data")
+
+    check_rate_limit(request, max_requests=20, window_seconds=3600, endpoint="save", identity=f"user:{user_id}")
 
     try:
         user_input = _sanitize_persisted_input(debate_data.get("input", {}) or {})
@@ -157,9 +165,10 @@ def save_debate_route(
 
 
 @router.get("/journal")
-def get_journal(user: dict = Depends(require_auth), limit: int = 50):
+def get_journal(request: Request, user: dict = Depends(require_auth), limit: int = 50):
     """Get saved debates for the authenticated user (Decision Journal)."""
     user_id = user["sub"]
+    check_rate_limit(request, max_requests=120, window_seconds=3600, endpoint="journal", identity=f"user:{user_id}")
     try:
         return get_user_debates(user_id, limit=min(limit, 100))
     except Exception as e:
@@ -168,8 +177,10 @@ def get_journal(user: dict = Depends(require_auth), limit: int = 50):
 
 
 @router.post("/debate/share")
-def share_debate(body: ShareDebateRequest):
+def share_debate(body: ShareDebateRequest, request: Request):
     """Create a public shareable link for a debate. No auth required."""
+    check_rate_limit(request, max_requests=5, window_seconds=900, endpoint="share:burst")
+    check_rate_limit(request, max_requests=25, window_seconds=3600, endpoint="share")
     share_id = uuid.uuid4().hex[:10]
     try:
         save_shared_debate(share_id, body.debate_data, body.input_data)
@@ -180,8 +191,10 @@ def share_debate(body: ShareDebateRequest):
 
 
 @router.get("/debate/shared/{share_id}")
-def get_shared(share_id: str):
+def get_shared(share_id: str, request: Request):
     """Retrieve a publicly shared debate. No auth required."""
+    check_rate_limit(request, max_requests=60, window_seconds=300, endpoint="shared:burst")
+    check_rate_limit(request, max_requests=400, window_seconds=3600, endpoint="shared")
     item = get_shared_debate(share_id)
     if not item:
         raise HTTPException(status_code=404, detail="Shared debate not found or has expired.")
@@ -189,9 +202,10 @@ def get_shared(share_id: str):
 
 
 @router.post("/debate/{debate_id}/choose")
-def choose_path(debate_id: str, body: ChoosePathRequest, user: dict = Depends(require_auth)):
+def choose_path(debate_id: str, body: ChoosePathRequest, request: Request, user: dict = Depends(require_auth)):
     """Record which path the user chose for a saved debate."""
     user_id = user["sub"]
+    check_rate_limit(request, max_requests=40, window_seconds=3600, endpoint="choose", identity=f"user:{user_id}")
     now = datetime.now(timezone.utc).isoformat()
     ok = update_debate_outcome(debate_id, user_id, body.chosen_path, now)
     if not ok:
@@ -200,9 +214,10 @@ def choose_path(debate_id: str, body: ChoosePathRequest, user: dict = Depends(re
 
 
 @router.post("/debate/{debate_id}/reflect")
-def reflect_on_debate(debate_id: str, body: ReflectionRequest, user: dict = Depends(require_auth)):
+def reflect_on_debate(debate_id: str, body: ReflectionRequest, request: Request, user: dict = Depends(require_auth)):
     """Record a reflection on a past decision."""
     user_id = user["sub"]
+    check_rate_limit(request, max_requests=20, window_seconds=3600, endpoint="reflect", identity=f"user:{user_id}")
     now = datetime.now(timezone.utc).isoformat()
     ok = update_debate_reflection(debate_id, user_id, body.satisfaction, body.note, now)
     if not ok:
@@ -211,8 +226,9 @@ def reflect_on_debate(debate_id: str, body: ReflectionRequest, user: dict = Depe
 
 
 @router.get("/health")
-def health_check():
+def health_check(request: Request):
     """Health check with dependency verification."""
+    check_rate_limit(request, max_requests=30, window_seconds=300, endpoint="health")
     deps: dict[str, str] = {}
     settings = get_settings()
 
@@ -244,8 +260,10 @@ def health_check():
 
     all_ok = all(v == "ok" for v in deps.values() if v != "not configured")
 
-    return {
+    response = {
         "status": "Sic Mundus Creatus Est" if all_ok else "degraded",
         "version": settings.app_version,
-        "dependencies": deps,
     }
+    if settings.debug:
+        response["dependencies"] = deps
+    return response
