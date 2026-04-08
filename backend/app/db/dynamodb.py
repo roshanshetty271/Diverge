@@ -5,6 +5,7 @@ Kiro security audit fix: replaced table.scan() with GSI query.
 
 import boto3
 import logging
+from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 from boto3.dynamodb.conditions import Key
 from app.config import get_settings
@@ -32,6 +33,28 @@ def _get_table(table_name: str):
     return dynamodb.Table(table_name)
 
 
+def _to_dynamodb_compatible(value):
+    """Recursively coerce floats into Decimal for boto3 DynamoDB writes."""
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, list):
+        return [_to_dynamodb_compatible(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _to_dynamodb_compatible(item) for key, item in value.items()}
+    return value
+
+
+def _from_dynamodb_compatible(value):
+    """Recursively convert DynamoDB Decimal values back into Python numbers."""
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, list):
+        return [_from_dynamodb_compatible(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _from_dynamodb_compatible(item) for key, item in value.items()}
+    return value
+
+
 def save_debate(debate_id: str, user_id: str, user_input: dict, debate_data: dict) -> dict:
     """Save a completed debate to DynamoDB."""
     settings = get_settings()
@@ -51,7 +74,7 @@ def save_debate(debate_id: str, user_id: str, user_input: dict, debate_data: dic
     }
 
     try:
-        table.put_item(Item=item)
+        table.put_item(Item=_to_dynamodb_compatible(item))
         logger.info(f"Saved debate {debate_id} for user {user_id}")
         return item
     except Exception as e:
@@ -78,9 +101,9 @@ def get_user_debates(user_id: str, limit: int = 50, last_key: dict | None = None
             query_params["ExclusiveStartKey"] = last_key
 
         response = table.query(**query_params)
-        result = {"items": response.get("Items", [])}
+        result = {"items": _from_dynamodb_compatible(response.get("Items", []))}
         if "LastEvaluatedKey" in response:
-            result["last_key"] = response["LastEvaluatedKey"]
+            result["last_key"] = _from_dynamodb_compatible(response["LastEvaluatedKey"])
         return result
     except Exception as e:
         logger.error(f"Failed to get debates for user {user_id}: {e}")
@@ -94,7 +117,7 @@ def get_user_profile(user_id: str) -> dict | None:
 
     try:
         response = table.get_item(Key={"user_id": user_id})
-        return response.get("Item")
+        return _from_dynamodb_compatible(response.get("Item"))
     except Exception as e:
         logger.error(f"Failed to get profile for {user_id}: {e}")
         return None
@@ -120,7 +143,7 @@ def upsert_user_profile(user_id: str, profile_data: dict) -> dict:
             "user_id": user_id,
             "updated_at": now,
         }
-        table.put_item(Item=item)
+        table.put_item(Item=_to_dynamodb_compatible(item))
         return item
     except Exception as e:
         logger.error(f"Failed to upsert profile for {user_id}: {e}")
@@ -156,7 +179,7 @@ def create_debate_session(debate_id: str, user_id: str, user_input: dict, sessio
     }
 
     try:
-        table.put_item(Item=item)
+        table.put_item(Item=_to_dynamodb_compatible(item))
         return item
     except Exception as e:
         logger.error(f"Failed to create session {debate_id}: {e}")
@@ -170,7 +193,7 @@ def get_debate_session(debate_id: str) -> dict | None:
 
     try:
         response = table.get_item(Key={"debate_id": debate_id})
-        item = response.get("Item")
+        item = _from_dynamodb_compatible(response.get("Item"))
         if item and item.get("session_type") == "checkpointed":
             return item
         return None
@@ -197,7 +220,7 @@ def update_debate_session(debate_id: str, session_data: dict) -> dict:
             "updated_at": now.isoformat(),
             "ttl": int((now + timedelta(days=7)).timestamp()),
         }
-        table.put_item(Item=item)
+        table.put_item(Item=_to_dynamodb_compatible(item))
         return item
     except Exception as e:
         logger.error(f"Failed to update session {debate_id}: {e}")
@@ -217,7 +240,7 @@ def create_checkin_records(records: list[dict]) -> int:
     try:
         with table.batch_writer() as batch:
             for record in records:
-                batch.put_item(Item=record)
+                batch.put_item(Item=_to_dynamodb_compatible(record))
         return len(records)
     except Exception as e:
         logger.error(f"Failed to create check-in records: {e}")
@@ -237,7 +260,7 @@ def get_due_checkins(limit: int = 25) -> list[dict]:
             Limit=min(limit, 100),
             ScanIndexForward=True,
         )
-        return response.get("Items", [])
+        return _from_dynamodb_compatible(response.get("Items", []))
     except Exception as e:
         logger.error(f"Failed to query due check-ins: {e}")
         return []
@@ -250,13 +273,13 @@ def update_checkin_record(checkin_id: str, updates: dict) -> dict:
 
     try:
         response = table.get_item(Key={"checkin_id": checkin_id})
-        item = response.get("Item")
+        item = _from_dynamodb_compatible(response.get("Item"))
         if not item:
             raise ValueError(f"Check-in {checkin_id} not found")
 
         item.update(updates)
         item["updated_at"] = datetime.now(timezone.utc).isoformat()
-        table.put_item(Item=item)
+        table.put_item(Item=_to_dynamodb_compatible(item))
         return item
     except Exception as e:
         logger.error(f"Failed to update check-in {checkin_id}: {e}")
@@ -287,7 +310,7 @@ def save_shared_debate(share_id: str, debate_data: dict, user_input: dict) -> di
     }
 
     try:
-        table.put_item(Item=item)
+        table.put_item(Item=_to_dynamodb_compatible(item))
         logger.info(f"Saved shared debate {share_id}")
         return item
     except Exception as e:
@@ -302,7 +325,7 @@ def get_shared_debate(share_id: str) -> dict | None:
 
     try:
         response = table.get_item(Key={"debate_id": f"shared#{share_id}"})
-        item = response.get("Item")
+        item = _from_dynamodb_compatible(response.get("Item"))
         if item and item.get("is_public"):
             return item
         return None

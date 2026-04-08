@@ -12,8 +12,11 @@ Globals:
     Environment:
       Variables:
         DIVERGE_AWS_REGION: !Ref AWS::Region
-        DIVERGE_DEBATE_MODEL_ID: us.amazon.nova-pro-v1:0
-        DIVERGE_METRICS_MODEL_ID: us.amazon.nova-lite-v1:0
+        DIVERGE_MODEL_PROVIDER: !Ref ModelProvider
+        DIVERGE_DEBATE_MODEL_ID: !Ref DebateModelId
+        DIVERGE_METRICS_MODEL_ID: !Ref MetricsModelId
+        DIVERGE_OPENAI_API_KEY: !Ref OpenAIApiKey
+        DIVERGE_COMPREHEND_ENABLED: !Ref EnableComprehend
         DIVERGE_DEBUG: "false"
 
 Parameters:
@@ -21,6 +24,31 @@ Parameters:
     Type: String
     Default: prod
     AllowedValues: [dev, prod]
+  OpenAIApiKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+  ModelProvider:
+    Type: String
+    Default: "openai"
+    AllowedValues: ["openai", "bedrock"]
+  DebateModelId:
+    Type: String
+    Default: "gpt-4o-mini"
+  MetricsModelId:
+    Type: String
+    Default: "gpt-4o-mini"
+  EnableComprehend:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableCloudFront:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+Conditions:
+  CreateCloudFront: !Equals [!Ref EnableCloudFront, "true"]
 
 Resources:
   # ── Cognito ────────────────────────────────────────────────────
@@ -175,9 +203,13 @@ Resources:
                 - bedrock:InvokeModelWithResponseStream
                 - bedrock:ApplyGuardrail
               Resource:
+                - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0"
+                - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0"
                 - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/us.amazon.nova-pro-v1:0"
                 - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/us.amazon.nova-lite-v1:0"
                 - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/us.anthropic.claude-sonnet-4-20250514-v1:0"
+                - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0"
+                - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-lite-v1:0"
             - Effect: Allow
               Action:
                 - bedrock:Retrieve
@@ -376,6 +408,7 @@ Resources:
   # NOTE: Requires account verification. Deploy will fail if not verified.
   # Comment out this section if CloudFront is blocked.
   CloudFrontOAC:
+    Condition: CreateCloudFront
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
       OriginAccessControlConfig:
@@ -385,6 +418,7 @@ Resources:
         SigningProtocol: sigv4
 
   CloudFrontDistribution:
+    Condition: CreateCloudFront
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
@@ -427,6 +461,7 @@ Resources:
             ErrorCachingMinTTL: 10
 
   FrontendBucketPolicy:
+    Condition: CreateCloudFront
     Type: AWS::S3::BucketPolicy
     Properties:
       Bucket: !Ref FrontendBucket
@@ -489,6 +524,8 @@ Outputs:
   FrontendBucket:
     Value: !Ref FrontendBucket
   CloudFrontDomain:
+    Condition: CreateCloudFront
     Value: !GetAtt CloudFrontDistribution.DomainName
   CloudFrontDistributionId:
+    Condition: CreateCloudFront
     Value: !Ref CloudFrontDistribution

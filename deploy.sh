@@ -8,6 +8,16 @@ set -euo pipefail
 STAGE="${1:-prod}"
 STACK_NAME="diverge-${STAGE}"
 REGION="${AWS_REGION:-us-east-1}"
+ENABLE_COMPREHEND="${ENABLE_COMPREHEND:-false}"
+ENABLE_CLOUDFRONT="${ENABLE_CLOUDFRONT:-false}"
+MODEL_PROVIDER="${MODEL_PROVIDER:-openai}"
+DEBATE_MODEL_ID="${DEBATE_MODEL_ID:-gpt-4o-mini}"
+METRICS_MODEL_ID="${METRICS_MODEL_ID:-gpt-4o-mini}"
+OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+
+if [ "$MODEL_PROVIDER" = "openai" ] && [ -z "$OPENAI_API_KEY" ] && [ -f backend/.env ]; then
+  OPENAI_API_KEY="$(grep '^DIVERGE_OPENAI_API_KEY=' backend/.env | head -n 1 | cut -d= -f2-)"
+fi
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
@@ -26,7 +36,14 @@ sam deploy \
   --stack-name "${STACK_NAME}" \
   --region "${REGION}" \
   --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
-  --parameter-overrides "Stage=${STAGE}" \
+  --parameter-overrides \
+  "Stage=${STAGE}" \
+  "EnableCloudFront=${ENABLE_CLOUDFRONT}" \
+  "EnableComprehend=${ENABLE_COMPREHEND}" \
+  "ModelProvider=${MODEL_PROVIDER}" \
+  "DebateModelId=${DEBATE_MODEL_ID}" \
+  "MetricsModelId=${METRICS_MODEL_ID}" \
+  "OpenAIApiKey=${OPENAI_API_KEY}" \
   --resolve-s3 \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset
@@ -43,7 +60,14 @@ _get_output() {
   echo "$OUTPUTS" | python3 -c "import sys,json; [print(o['OutputValue']) for o in json.load(sys.stdin) if o['OutputKey']=='$1']"
 }
 
-CF_URL=$(_get_output CloudFrontUrl)
+CF_URL=$(_get_output CloudFrontDomain)
+if [ -z "$CF_URL" ]; then
+  CF_URL=$(_get_output CloudFrontUrl)
+else
+  CF_URL="https://${CF_URL}"
+fi
+API_URL=$(_get_output ApiUrl)
+DEBATE_URL=$(_get_output DebateFunctionUrl)
 BUCKET=$(_get_output FrontendBucket)
 POOL_ID=$(_get_output UserPoolId)
 CLIENT_ID=$(_get_output UserPoolClientId)
@@ -51,13 +75,24 @@ COGNITO_DOMAIN=$(_get_output CognitoDomain)
 DIST_ID=$(_get_output CloudFrontDistributionId)
 
 # Validate critical outputs
-for var_name in CF_URL BUCKET POOL_ID CLIENT_ID; do
+for var_name in API_URL DEBATE_URL BUCKET POOL_ID CLIENT_ID; do
   eval "val=\$$var_name"
   if [ -z "$val" ]; then
     echo "ERROR: Failed to get $var_name from stack outputs"
     exit 1
   fi
 done
+
+if [ -z "$CF_URL" ]; then
+  echo "→ CloudFront is disabled for this stack, so frontend hosting is being skipped."
+  echo "  Backend deployed successfully."
+  echo ""
+  echo "  Use these frontend env vars for local testing against live AWS:"
+  echo "  VITE_API_URL=${API_URL}"
+  echo "  VITE_DEBATE_URL=${DEBATE_URL}"
+  echo "  VITE_CHECKPOINTED_DEBATE=true"
+  exit 0
+fi
 
 # ── Step 4: Build Frontend ──────────────────────────────────────
 echo "→ Building frontend with production config..."
@@ -66,6 +101,8 @@ cd frontend
 # Write production .env
 cat > .env.production << EOF
 VITE_API_URL=${CF_URL}
+VITE_DEBATE_URL=${DEBATE_URL}
+VITE_CHECKPOINTED_DEBATE=true
 VITE_COGNITO_REGION=${REGION}
 VITE_COGNITO_USER_POOL_ID=${POOL_ID}
 VITE_COGNITO_CLIENT_ID=${CLIENT_ID}
