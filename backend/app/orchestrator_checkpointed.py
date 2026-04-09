@@ -184,6 +184,7 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
         tools,
         alpha_persona,
         beta_persona,
+        interjection=interjection,
     )
     transcript.append(result)
     metrics.append(result.metrics)

@@ -190,7 +190,7 @@ Resources:
           AllowOrigins:
             - http://localhost:5173
             - !If [HasPublicAppUrl, !Ref PublicAppUrl, !Ref "AWS::NoValue"]
-          AllowMethods: ["POST", "OPTIONS"]
+          AllowMethods: ["POST"]
           AllowHeaders: ["Content-Type", "Authorization"]
       Environment:
         Variables:

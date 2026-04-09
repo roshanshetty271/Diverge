@@ -37,15 +37,13 @@ from app.config import get_settings
 
 logger = logging.getLogger("diverge.routes.debate")
 router = APIRouter(prefix="/api", tags=["debate"])
+# Only hydrate lightweight profile fields automatically. Narrative fields like
+# constraints or writing samples should never silently bleed into a new debate.
 PROFILE_FIELDS = (
     "user_name",
     "age",
-    "financial_context",
-    "values",
     "risk_level",
     "time_horizon",
-    "constraints",
-    "writing_samples",
 )
 
 

@@ -30,6 +30,7 @@ Thumbs.db
 
 # AWS
 .aws-sam/
+.aws-sam-fresh/
 samconfig.toml
 build.toml
 
@@ -49,6 +50,7 @@ packaged.yaml
 # Test/debug output
 response.json
 messages.json
+SAM-VERCEL-NOTES.txt
 
 # Logs
 *.log

@@ -221,12 +221,19 @@ def _run_round(
     tools: list,
     alpha_persona: dict,
     beta_persona: dict,
+    interjection: str | None = None,
 ) -> RoundResult:
     """Execute one debate round with smart retry logic."""
     alpha_response = ""
     beta_response = ""
 
     summary_prefix = f"DEBATE SO FAR:\n{debate_summary}\n\n" if debate_summary else ""
+    interjection_prefix = (
+        "IMPORTANT USER CONTEXT FOR THIS ROUND:\n"
+        f"- The user just added this and you must account for it explicitly: \"{interjection}\"\n\n"
+        if interjection
+        else ""
+    )
 
     for attempt in range(MAX_RETRIES):
         try:
@@ -242,12 +249,14 @@ def _run_round(
             if round_num == 0:
                 alpha_input = (
                     f"{summary_prefix}"
+                    f"{interjection_prefix}"
                     f"You chose \"{path_a}\". It's {timeline}. "
-                    f"Give your opening statement — what happened?"
+                    f"Give your opening statement - what happened?"
                 )
             else:
                 alpha_input = (
                     f"{summary_prefix}"
+                    f"{interjection_prefix}"
                     f"You chose \"{path_a}\". It's now {timeline}.\n\n"
                     f"The version of you who chose \"{path_b}\" just said:\n\n"
                     f"\"{prev_beta}\"\n\n"
@@ -266,6 +275,7 @@ def _run_round(
             )
             raw_beta = beta_agent(
                 f"{summary_prefix}"
+                f"{interjection_prefix}"
                 f"You chose \"{path_b}\". It's now {timeline}.\n\n"
                 f"The version of you who chose \"{path_a}\" just said:\n\n"
                 f"\"{alpha_response}\"\n\n"
@@ -582,6 +592,12 @@ def run_debate_token_streaming(user_context: dict):
         }
 
         summary_prefix = f"DEBATE SO FAR:\n{debate_summary}\n\n" if debate_summary else ""
+        interjection_prefix = (
+            "IMPORTANT USER CONTEXT FOR THIS ROUND:\n"
+            f"- The user just added this and you must account for it explicitly: \"{interjection}\"\n\n"
+            if interjection
+            else ""
+        )
         path_a = user_context["path_a"]
         path_b = user_context["path_b"]
         timeline = round_info.get("timeline", f"round {i + 1}")
@@ -594,12 +610,14 @@ def run_debate_token_streaming(user_context: dict):
         if i == 0:
             alpha_input = (
                 f"{summary_prefix}"
+                f"{interjection_prefix}"
                 f'You chose "{path_a}". It\'s {timeline}. '
-                f"Give your opening statement — what happened?"
+                f"Give your opening statement - what happened?"
             )
         else:
             alpha_input = (
                 f"{summary_prefix}"
+                f"{interjection_prefix}"
                 f'You chose "{path_a}". It\'s now {timeline}.\n\n'
                 f'The version of you who chose "{path_b}" just said:\n\n'
                 f'"{prev_beta}"\n\n'
@@ -651,6 +669,7 @@ def run_debate_token_streaming(user_context: dict):
             beta_q: queue.Queue = queue.Queue()
             beta_input = (
                 f"{summary_prefix}"
+                f"{interjection_prefix}"
                 f'You chose "{path_b}". It\'s now {timeline}.\n\n'
                 f'The version of you who chose "{path_a}" just said:\n\n'
                 f'"{alpha_response}"\n\n'
