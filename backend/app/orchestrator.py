@@ -251,7 +251,8 @@ def _run_round(
                     f"{summary_prefix}"
                     f"{interjection_prefix}"
                     f"You chose \"{path_a}\". It's {timeline}. "
-                    f"Give your opening statement - what happened?"
+                    f"Speak from one emotionally loaded moment that shows what choosing this path did to you. "
+                    f"Make it concrete."
                 )
             else:
                 alpha_input = (
@@ -260,7 +261,8 @@ def _run_round(
                     f"You chose \"{path_a}\". It's now {timeline}.\n\n"
                     f"The version of you who chose \"{path_b}\" just said:\n\n"
                     f"\"{prev_beta}\"\n\n"
-                    f"Fight back. What's YOUR reality at {timeline}?"
+                    f"Do not spar line by line. Let what they said sharpen your own clarity. "
+                    f"Answer with quiet conviction from one emotionally loaded moment, and name the cost they are underestimating."
                 )
             raw_alpha = alpha_agent(alpha_input)
             alpha_response = validate_safe_content(validate_agent_output(_safe_agent_output(raw_alpha)))
@@ -279,7 +281,8 @@ def _run_round(
                 f"You chose \"{path_b}\". It's now {timeline}.\n\n"
                 f"The version of you who chose \"{path_a}\" just said:\n\n"
                 f"\"{alpha_response}\"\n\n"
-                f"Fight back. What's YOUR reality at {timeline}?"
+                f"Do not spar line by line. Let what they said sharpen your own clarity. "
+                f"Answer with quiet conviction from one emotionally loaded moment, and name the cost they are underestimating."
             )
             beta_response = validate_safe_content(validate_agent_output(_safe_agent_output(raw_beta)))
 
@@ -612,7 +615,8 @@ def run_debate_token_streaming(user_context: dict):
                 f"{summary_prefix}"
                 f"{interjection_prefix}"
                 f'You chose "{path_a}". It\'s {timeline}. '
-                f"Give your opening statement - what happened?"
+                f"Speak from one emotionally loaded moment that shows what choosing this path did to you. "
+                f"Make it concrete."
             )
         else:
             alpha_input = (
@@ -621,7 +625,8 @@ def run_debate_token_streaming(user_context: dict):
                 f'You chose "{path_a}". It\'s now {timeline}.\n\n'
                 f'The version of you who chose "{path_b}" just said:\n\n'
                 f'"{prev_beta}"\n\n'
-                f"Fight back. What's YOUR reality at {timeline}?"
+                f"Do not spar line by line. Let what they said sharpen your own clarity. "
+                f"Answer with quiet conviction from one emotionally loaded moment, and name the cost they are underestimating."
             )
 
         try:
@@ -673,7 +678,8 @@ def run_debate_token_streaming(user_context: dict):
                 f'You chose "{path_b}". It\'s now {timeline}.\n\n'
                 f'The version of you who chose "{path_a}" just said:\n\n'
                 f'"{alpha_response}"\n\n'
-                f"Fight back. What's YOUR reality at {timeline}?"
+                f"Do not spar line by line. Let what they said sharpen your own clarity. "
+                f"Answer with quiet conviction from one emotionally loaded moment, and name the cost they are underestimating."
             )
 
             beta_result_holder: list[str] = []
