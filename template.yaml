@@ -190,7 +190,7 @@ Resources:
           AllowOrigins:
             - http://localhost:5173
             - !If [HasPublicAppUrl, !Ref PublicAppUrl, !Ref "AWS::NoValue"]
-          AllowMethods: ["POST"]
+          AllowMethods: ["POST", "OPTIONS"]
           AllowHeaders: ["Content-Type", "Authorization"]
       Environment:
         Variables:
@@ -246,7 +246,7 @@ Resources:
       CodeUri: backend/
       Handler: lambda_handler.handler
       Timeout: 29
-      MemorySize: 256
+      MemorySize: 512
       Tracing: Active
       Environment:
         Variables:
@@ -337,6 +337,24 @@ Resources:
             Path: /api/tts
             Method: post
             RestApiId: !Ref ApiGateway
+        DebateStart:
+          Type: Api
+          Properties:
+            Path: /api/debate/start
+            Method: post
+            RestApiId: !Ref ApiGateway
+        DebateSessionStart:
+          Type: Api
+          Properties:
+            Path: /api/debate/session/start
+            Method: post
+            RestApiId: !Ref ApiGateway
+        DebateSessionContinue:
+          Type: Api
+          Properties:
+            Path: /api/debate/session/{debate_id}/continue
+            Method: post
+            RestApiId: !Ref ApiGateway
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DebatesTable
@@ -397,6 +415,10 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: !Ref Stage
+      Cors:
+        AllowOrigin: "'*'"
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Authorization,Content-Type'"
       Auth:
         Authorizers:
           CognitoAuth:

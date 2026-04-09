@@ -14,6 +14,7 @@ MODEL_PROVIDER="${MODEL_PROVIDER:-openai}"
 DEBATE_MODEL_ID="${DEBATE_MODEL_ID:-gpt-4o-mini}"
 METRICS_MODEL_ID="${METRICS_MODEL_ID:-gpt-4o-mini}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+PUBLIC_APP_URL="${PUBLIC_APP_URL:-}"
 
 if [ "$MODEL_PROVIDER" = "openai" ] && [ -z "$OPENAI_API_KEY" ] && [ -f backend/.env ]; then
   OPENAI_API_KEY="$(grep '^DIVERGE_OPENAI_API_KEY=' backend/.env | head -n 1 | cut -d= -f2-)"
@@ -43,6 +44,7 @@ sam deploy \
   "ModelProvider=${MODEL_PROVIDER}" \
   "DebateModelId=${DEBATE_MODEL_ID}" \
   "MetricsModelId=${METRICS_MODEL_ID}" \
+  "PublicAppUrl=${PUBLIC_APP_URL}" \
   "OpenAIApiKey=${OPENAI_API_KEY}" \
   --resolve-s3 \
   --no-confirm-changeset \

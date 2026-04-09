@@ -8,6 +8,7 @@ import type {
 
 const DEBATE_TIMEOUT_MS = 150_000;
 const DEFAULT_TIMEOUT_MS = 15_000;
+const CHECKPOINTED_BASE = DEBATE_BASE || API_BASE;
 
 interface FetchOptions extends RequestInit {
   _timeout?: number;
@@ -77,7 +78,7 @@ export async function startCheckpointedDebate(
   input: DecisionInput,
   signal?: AbortSignal,
 ): Promise<CheckpointedDebateResponse> {
-  return apiFetch<CheckpointedDebateResponse>(`${DEBATE_BASE}/api/debate/session/start`, {
+  return apiFetch<CheckpointedDebateResponse>(`${CHECKPOINTED_BASE}/api/debate/session/start`, {
     method: "POST",
     body: JSON.stringify(input),
     signal,
@@ -89,7 +90,7 @@ export async function continueCheckpointedDebate(
   debateId: string,
   interjection?: string,
 ): Promise<CheckpointedDebateResponse> {
-  return apiFetch<CheckpointedDebateResponse>(`${DEBATE_BASE}/api/debate/session/${debateId}/continue`, {
+  return apiFetch<CheckpointedDebateResponse>(`${CHECKPOINTED_BASE}/api/debate/session/${debateId}/continue`, {
     method: "POST",
     body: JSON.stringify({ interjection: interjection || null }),
     _timeout: DEBATE_TIMEOUT_MS,
