@@ -16,6 +16,13 @@ METRICS_MODEL_ID="${METRICS_MODEL_ID:-gpt-4o-mini}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 PUBLIC_APP_URL="${PUBLIC_APP_URL:-}"
 
+AWS_CMD="${AWS_CMD:-aws}"
+if ! command -v "$AWS_CMD" >/dev/null 2>&1; then
+  if command -v aws.exe >/dev/null 2>&1; then
+    AWS_CMD="aws.exe"
+  fi
+fi
+
 if [ "$MODEL_PROVIDER" = "openai" ] && [ -z "$OPENAI_API_KEY" ] && [ -f backend/.env ]; then
   OPENAI_API_KEY="$(grep '^DIVERGE_OPENAI_API_KEY=' backend/.env | head -n 1 | cut -d= -f2-)"
 fi
@@ -52,7 +59,7 @@ sam deploy \
 
 # ── Step 3: Get Outputs ─────────────────────────────────────────
 echo "→ Fetching stack outputs..."
-OUTPUTS=$(aws cloudformation describe-stacks \
+OUTPUTS=$("$AWS_CMD" cloudformation describe-stacks \
   --stack-name "${STACK_NAME}" \
   --region "${REGION}" \
   --query "Stacks[0].Outputs" \
@@ -117,7 +124,7 @@ npm run build
 
 # ── Step 5: Upload to S3 ────────────────────────────────────────
 echo "→ Uploading frontend to S3..."
-aws s3 sync dist/ "s3://${BUCKET}/" \
+  "$AWS_CMD" s3 sync dist/ "s3://${BUCKET}/" \
   --region "${REGION}" \
   --delete \
   --cache-control "public, max-age=31536000, immutable" \
@@ -125,7 +132,7 @@ aws s3 sync dist/ "s3://${BUCKET}/" \
   --exclude "*.json"
 
 # index.html should not be cached (SPA entry point)
-aws s3 cp dist/index.html "s3://${BUCKET}/index.html" \
+"$AWS_CMD" s3 cp dist/index.html "s3://${BUCKET}/index.html" \
   --region "${REGION}" \
   --cache-control "no-cache, no-store, must-revalidate"
 
@@ -134,7 +141,7 @@ cd ..
 # ── Step 6: Invalidate CloudFront ────────────────────────────────
 echo "→ Invalidating CloudFront cache..."
 if [ -n "$DIST_ID" ]; then
-  aws cloudfront create-invalidation \
+  "$AWS_CMD" cloudfront create-invalidation \
     --distribution-id "$DIST_ID" \
     --paths "/*" > /dev/null
   echo "  CloudFront invalidation started for ${DIST_ID}"
