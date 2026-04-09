@@ -8,7 +8,7 @@ import type {
 
 const DEBATE_TIMEOUT_MS = 150_000;
 const DEFAULT_TIMEOUT_MS = 15_000;
-const CHECKPOINTED_BASE = DEBATE_BASE || API_BASE;
+const CHECKPOINTED_BASE = API_BASE || DEBATE_BASE;
 
 interface FetchOptions extends RequestInit {
   _timeout?: number;
