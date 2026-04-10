@@ -17,6 +17,21 @@ function stripMarkdown(t: string): string {
     .trim();
 }
 
+function resolveResources(debate: DebateResponse): Resource[] {
+  const structured = debate.timeline?.stage_06_what_to_explore_next || [];
+  if (structured.length > 0) {
+    return structured.slice(0, 3).map((item) => ({
+      type: item.type,
+      title: item.title,
+      author: item.author,
+      url: item.url,
+      why: stripMarkdown(item.why_it_helps || ""),
+    }));
+  }
+
+  return (debate.resources || []).slice(0, 3);
+}
+
 export function generateDebatePdf(debate: DebateResponse, input: DecisionInput | null): void {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth();
@@ -139,7 +154,7 @@ export function generateDebatePdf(debate: DebateResponse, input: DecisionInput |
   }
 
   // Resources
-  const resources: Resource[] = (debate.resources || []).slice(0, 3);
+  const resources: Resource[] = resolveResources(debate);
   if (resources.length > 0) {
     if (y > 250) {
       doc.addPage();

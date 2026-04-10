@@ -50,7 +50,7 @@ export default function Debate() {
   const allMetrics: (RoundMetrics | null)[] = isStreaming ? stream.metrics : (locationState.debate?.metrics || stored?.debate?.metrics || []);
   const verdictReady = isStreaming ? stream.done && !!stream.verdict : true;
   const debate: DebateResponse | undefined = isStreaming
-    ? { debate_id: stream.debateId || "", transcript: stream.rounds, verdict: stream.verdict || "", metrics: stream.metrics, completed_rounds: stream.completedRounds, total_rounds: stream.totalRounds }
+    ? { debate_id: stream.debateId || "", transcript: stream.rounds, verdict: stream.verdict || "", timeline: stream.timeline, metrics: stream.metrics, completed_rounds: stream.completedRounds, total_rounds: stream.totalRounds }
     : (locationState.debate || stored?.debate);
   const isCheckpointedMode = Boolean(
     CHECKPOINTED_DEBATE_ENABLED &&
@@ -82,7 +82,7 @@ export default function Debate() {
 
       if (s.done && s.input && s.rounds.length > 0) {
         storeDebateState(
-          { debate_id: s.debateId || "", transcript: s.rounds, verdict: s.verdict || "", metrics: s.metrics, completed_rounds: s.completedRounds, total_rounds: s.totalRounds },
+          { debate_id: s.debateId || "", transcript: s.rounds, verdict: s.verdict || "", timeline: s.timeline, metrics: s.metrics, completed_rounds: s.completedRounds, total_rounds: s.totalRounds },
           s.input,
         );
       }
@@ -214,6 +214,7 @@ export default function Debate() {
         debate_id: result.debate_id,
         transcript: result.transcript,
         verdict: result.verdict || "",
+        timeline: result.timeline || null,
         metrics: result.metrics,
         completed_rounds: result.completed_rounds,
         total_rounds: result.total_rounds,

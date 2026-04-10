@@ -47,6 +47,26 @@ PROFILE_FIELDS = (
 )
 
 
+def _log_debug_debate_input(label: str, user_context: dict):
+    """Emit a concise debate input trace only in local/debug mode."""
+    settings = get_settings()
+    if not settings.debug:
+        return
+
+    logger.info(
+        "[debug-trace] %s | name=%r age=%r path_a=%r path_b=%r constraints=%r financial=%r values=%r writing_samples_len=%s",
+        label,
+        user_context.get("user_name"),
+        user_context.get("age"),
+        user_context.get("path_a"),
+        user_context.get("path_b"),
+        user_context.get("constraints"),
+        user_context.get("financial_context"),
+        user_context.get("values"),
+        len(user_context.get("writing_samples") or ""),
+    )
+
+
 def _hydrate_from_profile(user_context: dict, user: Optional[dict]) -> dict:
     """Backfill missing authenticated user context from saved profile data."""
     if not user:
@@ -132,6 +152,8 @@ def start_debate(
     user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
     user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
     user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+    _log_debug_debate_input("debate.stream.start", user_context)
+    _log_debug_debate_input("debate.start", user_context)
 
     # Track who started this debate
     user_id = user["sub"] if user else "anonymous"
@@ -193,6 +215,7 @@ def start_checkpointed_debate_route(
     user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
     user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
     user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+    _log_debug_debate_input("debate.session.start", user_context)
 
     user_id = user["sub"] if user else "anonymous"
     logger.info(
@@ -241,6 +264,8 @@ def continue_checkpointed_debate_route(
                 detail="Your input contains patterns that can't be processed.",
             )
         interjection = sanitize_user_input(interjection)
+        if get_settings().debug:
+            logger.info("[debug-trace] debate.session.continue | debate_id=%s interjection=%r", debate_id, interjection)
 
     try:
         return continue_checkpointed_debate(debate_id, interjection or None)
@@ -337,6 +362,8 @@ def interject_debate(req: InterjectionRequest, request: Request):
     sanitized = sanitize_user_input(req.text)
     set_interjection(req.debate_id, sanitized)
     logger.info(f"Interjection stored for debate {req.debate_id}: '{sanitized[:50]}...'")
+    if get_settings().debug:
+        logger.info("[debug-trace] debate.interject | debate_id=%s text=%r", req.debate_id, sanitized)
     return {"status": "ok"}
 
 
@@ -380,6 +407,7 @@ async def stream_debate_tokens(
     user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
     user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
     user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+    _log_debug_debate_input("debate.stream_tokens.start", user_context)
 
     user_id = user["sub"] if user else "anonymous"
     logger.info(f"Starting token-streaming debate: '{decision.path_a}' vs '{decision.path_b}' by {user_id}")

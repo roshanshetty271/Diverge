@@ -13,6 +13,7 @@ from app.db.dynamodb import (
 from app.orchestrator import (
     TOOL_MAP,
     _assign_personas,
+    _generate_structured_timeline,
     _generate_verdict,
     _get_resources,
     _persist_to_agentcore_memory,
@@ -80,7 +81,7 @@ def start_checkpointed_debate(user_context: dict, user_id: str = "anonymous") ->
     category = detect_decision_category(user_context["path_a"], user_context["path_b"])
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
-    alpha_persona, beta_persona = _assign_personas()
+    alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
 
     enriched_context = {
         **user_context,
@@ -150,6 +151,7 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
             debate_id=debate_id,
             transcript=transcript,
             verdict=session.get("verdict", ""),
+            timeline=session.get("timeline"),
             metrics=metrics,
             completed_rounds=len([r for r in transcript if r.status == "completed"]),
             total_rounds=int(session.get("total_rounds", len(transcript))),
@@ -161,7 +163,7 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
     category = session.get("category", "general")
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
-    alpha_persona, beta_persona = _assign_personas()
+    alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
     transcript = _deserialize_transcript(session.get("transcript", []))
     metrics = _deserialize_metrics(session.get("metrics", []))
     debate_summary = session.get("debate_summary", "")
@@ -202,7 +204,8 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
 
     if next_round_index >= len(rounds):
         verdict = _build_partial_verdict(transcript, user_context, len(rounds))
-        resources = _serialize_models(_get_resources(category))
+        timeline = _generate_structured_timeline(transcript, user_context) if completed_rounds >= 3 else None
+        resources = _serialize_models(_get_resources(user_context))
 
         complete_debate_session(
             debate_id,
@@ -213,6 +216,7 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
                 "debate_summary": debate_summary,
                 "prev_beta": prev_beta,
                 "verdict": verdict,
+                "timeline": timeline.model_dump() if timeline else None,
                 "resources": resources,
                 "total_rounds": len(rounds),
             },
@@ -224,6 +228,7 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
             debate_id=debate_id,
             transcript=transcript,
             verdict=verdict,
+            timeline=timeline,
             metrics=metrics,
             completed_rounds=completed_rounds,
             total_rounds=len(rounds),
@@ -249,6 +254,7 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
         debate_id=debate_id,
         transcript=transcript,
         verdict="",
+        timeline=None,
         metrics=metrics,
         completed_rounds=completed_rounds,
         total_rounds=len(rounds),

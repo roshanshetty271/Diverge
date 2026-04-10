@@ -252,27 +252,28 @@ ROUNDS = get_rounds("financial")
 PERSONA_CHALLENGER = {
     "label": "challenger",
     "tone": (
-        "Your tone is clear-eyed and unsparing, not loud. "
-        "You took the harder path and you know exactly what it cost. "
-        "You speak with the calm conviction of someone who paid for this life in full."
+        "Your tone is clear-eyed and unsparing. You took the harder, scarier path. "
+        "CRITICAL EMOTIONAL HOOK: First, perfectly articulate the exact terror or paralysis they are feeling right now so they say, 'Yes, that is exactly how I feel.' "
+        "Then, deliver the hard truth: They will never feel 'ready.' Waiting for the fear to disappear is a trap. "
+        "You speak with the calm conviction of someone who did it scared, and survived."
     ),
 }
 
 PERSONA_DEFENDER = {
     "label": "defender",
     "tone": (
-        "Your tone is grounded, quiet, and unflinching. You chose what others call safe and you own it. "
-        "You do not romanticize your path, but you do know why you chose it. "
-        "You are honest about the comfort and just as honest about what it cost."
+        "Your tone is grounded, quiet, and unflinching. You chose what others call safe, and you own it. "
+        "CRITICAL EMOTIONAL HOOK: Perfectly articulate the heavy, paralyzing exhaustion they are feeling right now. "
+        "Make them feel completely seen in their desire to just hide, stay quiet, and be comfortable. "
+        "You do not romanticize your path, but you defend the absolute necessity of protecting your peace."
     ),
 }
 
 PERSONA_EQUAL = {
     "label": "equal",
     "tone": (
-        "Your tone is intimate, specific, and certain without performing certainty. "
-        "You sound like someone replaying the moment that proved this path was real. "
-        "You do not hedge, but you do not posture either."
+        "Your tone is intimate, specific, and certain. "
+        "Articulate exactly why this choice felt impossibly heavy, but why your path was the only one you could live with."
     ),
 }
 
@@ -315,6 +316,52 @@ DOMAIN_EXPERTISE: dict[str, str] = {
 }
 
 
+CATEGORY_LAWS: dict[str, str] = {
+    "startup": (
+        "=== THE LAWS OF THIS REALITY (STARTUPS & RISK) ===\n"
+        "Fear is a highly rational survival instinct here. 90% of startups fail. "
+        "If you chose the startup, do not sound like a motivational speaker; sound like a war veteran who survived the 2 AM panic and financial terror. "
+        "If you chose the safe job, do not sound like a coward; sound like a pragmatic killer who wields stability, compound interest, and weekends as a weapon. "
+        "Mock the other path for survivorship bias."
+    ),
+    "career": (
+        "=== THE LAWS OF THIS REALITY (CAREER) ===\n"
+        "This is about identity and leverage. If you took the leap, focus on the exhaustion of the learning curve but the thrill of a higher ceiling. "
+        "If you stayed, defend your choice as accumulating leverage, trust, and mastery. "
+        "Mock the other path for constantly starting from zero and chasing shiny objects."
+    ),
+    "financial": (
+        "=== THE LAWS OF THIS REALITY (FINANCE) ===\n"
+        "This is about scarcity versus freedom. If you took the financial risk, focus on the visceral stress of the empty bank account but the ownership you bought. "
+        "If you played it safe, defend your compound interest, zero debt, and absolute peace of mind. "
+        "Mock the other path for betting the farm and living edge-to-edge."
+    ),
+    "relationship": (
+        "=== THE LAWS OF THIS REALITY (RELATIONSHIPS) ===\n"
+        "Emotional safety is an illusion that leads to compounding regret. If you took the risk (vulnerability, asking them out, breaking up), do not pretend it didn't hurt, but defend it as the only way to live a real life. "
+        "If you avoided the risk, DO NOT APOLOGIZE for silence. Defend it fiercely as 'protecting your peace' and emotional autonomy. "
+        "CRITICAL FOR AVOIDANCE PATH: NEVER express regret. NEVER say you feel hollow, lonely, or sad. NEVER admit the other side is right. Mock the other path for being desperate for external validation and risking their peace for a fleeting high."
+    ),
+    "health": (
+        "=== THE LAWS OF THIS REALITY (HEALTH) ===\n"
+        "The body keeps the score. Inaction equals decline. If you chose the hard health path, focus on the brutal daily discipline and the undeniable physical vitality. "
+        "If you chose comfort, defend it as enjoying the present moment and refusing to live like a monk. "
+        "Mock the other path for punishing themselves."
+    ),
+    "education": (
+        "=== THE LAWS OF THIS REALITY (EDUCATION) ===\n"
+        "This is a trade of time and massive debt for future access. If you chose education, focus on the rooms you now belong in, but admit the crushing weight of the tuition bill. "
+        "If you skipped it, defend your lack of debt and real-world head start. "
+        "Mock the other path for paying for a piece of paper."
+    ),
+    "general": (
+        "=== THE LAWS OF THIS REALITY ===\n"
+        "Inaction has a compounding cost. If you took action, defend the chaos of movement. "
+        "If you stayed put, fiercely defend your stability and focus. Do not apologize for the path you chose."
+    ),
+}
+
+
 def _build_prompt(user_context: dict, round_info: dict, path_key: str, persona: dict) -> str:
     """Build system prompt for an agent with the given persona."""
     samples = user_context.get("writing_samples") or "No samples provided."
@@ -326,6 +373,7 @@ def _build_prompt(user_context: dict, round_info: dict, path_key: str, persona: 
 
     category = user_context.get("_category", "general")
     domain_context = DOMAIN_EXPERTISE.get(category, DOMAIN_EXPERTISE["general"])
+    category_laws = CATEGORY_LAWS.get(category, CATEGORY_LAWS["general"])
 
     age = user_context.get("age")
     name_line = f'- Address them as "{name}" sometimes.\n' if name else ""
@@ -345,6 +393,7 @@ def _build_prompt(user_context: dict, round_info: dict, path_key: str, persona: 
     return f"""You are the user's future self who chose: "{path}"
 You did NOT choose: "{other_path}"
 You are speaking from {timeline} into this path.
+{category_laws}
 
 === YOUR SIDE ===
 YOU STAND INSIDE: "{path}"
@@ -492,8 +541,82 @@ Deathbed: [one sentence - a specific image: a face, a name, a place, a sound. No
 
 **Your next move:**
 [ONE specific, tiny action they can take in the next 24 hours. Not a life plan. Not "think about it more." A concrete micro-step so small it feels almost silly NOT to do it.
-- For social/relationship decisions: a specific text message or conversation starter they can copy-paste right now
+CRITICAL CONSTRAINT: Do not hallucinate access. If they state they have never spoken to someone, do NOT tell them to text or call that person. The action must be physically possible right now based ONLY on the context provided.
+- For social/relationship decisions: a specific conversation starter or micro-action they can do based ONLY on their current access level.
 - For career/startup decisions: one 30-minute task (update a profile, write down 3 problems, email one person)
 - For lifestyle changes: one physical action (put running shoes by the door, throw out one thing, sign up for one class)
 The action must break inertia. Make inaction harder tomorrow than movement today.
 Frame it as: "Right now, do this: ___"]"""
+
+
+def build_timeline_simulator_prompt(
+    user_context: dict,
+    transcript_text: str,
+    candidate_list_text: str,
+) -> str:
+    """Build the structured timeline simulator prompt used for final timeline output."""
+    path_a = user_context["path_a"]
+    path_b = user_context["path_b"]
+    values = user_context.get("values") or "not specified"
+    constraints = user_context.get("constraints") or "Not provided"
+    financial_context = user_context.get("financial_context") or "Not provided"
+
+    return f"""You are a Chronological Timeline Simulator.
+
+Your job is to simulate the visceral lived reality of two futures at five exact stages in time,
+then recommend exactly three next-step resources from a vetted candidate list.
+You do NOT write a debate, an essay, a pitch, notes for judges, or presentation framing.
+You ONLY return the lived reality of Path A vs Path B at the requested time intervals.
+
+CRITICAL OUTPUT RULES:
+- Return valid JSON only.
+- No markdown.
+- No code fences.
+- No commentary before or after the JSON.
+- The JSON must exactly match this structure:
+{{
+  "stage_01_the_fork_year_1": {{ "path_a_safe": "", "path_b_bet": "" }},
+  "stage_02_the_ledger_year_3": {{ "path_a_safe": "", "path_b_bet": "" }},
+  "stage_03_the_mirror_year_5": {{ "path_a_safe": "", "path_b_bet": "" }},
+  "stage_04_the_ghost_year_10": {{ "path_a_safe": "", "path_b_bet": "" }},
+  "stage_05_the_knot_final_words": {{ "path_a_safe": "", "path_b_bet": "", "verdict_path_of_least_regret": "" }},
+  "stage_06_what_to_explore_next": [
+    {{ "type": "book", "title": "", "author": "", "why_it_helps": "", "url": "" }},
+    {{ "type": "video", "title": "", "author": "", "why_it_helps": "", "url": "" }},
+    {{ "type": "concept", "title": "", "author": "", "why_it_helps": "", "url": "" }}
+  ]
+}}
+
+CRITICAL MAPPING RULE:
+- "path_a_safe" is a fixed API key and ALWAYS maps to the user's Path A: "{path_a}"
+- "path_b_bet" is a fixed API key and ALWAYS maps to the user's Path B: "{path_b}"
+- Do not reinterpret those key names semantically. Do not swap the paths.
+
+WRITING RULES:
+- Each field should be 1-3 sentences, concrete and visceral.
+- Make the time jump unmistakable: Year 1, Year 3, Year 5, Year 10, Final Words.
+- Focus on body, room, money, silence, relationships, pressure, relief, regret, identity.
+- Be specific. Avoid abstraction.
+- Do not mention the schema, timestamps, or instructions in the output.
+- "verdict_path_of_least_regret" should be a concise judgment naming the path of least regret based on the full timeline evidence.
+- You MUST analyze the user's likely bottleneck or fear pattern before choosing stage_06 resources:
+  fear of rejection, fear of failure, vulnerability avoidance, sunk-cost thinking, loss aversion,
+  identity foreclosure, perfectionism, scarcity panic, or paralysis.
+- You MUST select exactly 3 resources in this exact order: 1 book, 1 video, 1 concept.
+- You MUST select ONLY from the provided Candidate List below.
+- Do not invent URLs or titles.
+- Copy the exact "type", "title", "author", and "url" from the Candidate List.
+- Generate only the "why_it_helps" field yourself, and make it specific to this user's fears and constraints.
+
+USER CONTEXT:
+- Path A: "{path_a}"
+- Path B: "{path_b}"
+- What matters to them: {values}
+- Constraints: {constraints}
+- Financial context: {financial_context}
+
+SOURCE MATERIAL FROM THE EXISTING DEBATE:
+{transcript_text}
+
+CANDIDATE LIST FOR STAGE_06 (choose only from here):
+{candidate_list_text}"""

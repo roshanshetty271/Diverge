@@ -1,10 +1,11 @@
 import { DEBATE_BASE } from "./constants";
-import type { RoundResult, RoundMetrics, DecisionInput, Resource } from "../types";
+import type { RoundResult, RoundMetrics, DecisionInput, Resource, ChronologicalTimeline } from "../types";
 
 export interface DebateStreamState {
   rounds: RoundResult[];
   metrics: (RoundMetrics | null)[];
   verdict: string | null;
+  timeline: ChronologicalTimeline | null;
   debateId: string | null;
   completedRounds: number;
   totalRounds: number;
@@ -29,6 +30,7 @@ let abortCtrl: AbortController | null = null;
 function emptyState(): DebateStreamState {
   return {
     rounds: [], metrics: [], verdict: null, debateId: null,
+    timeline: null,
     completedRounds: 0, totalRounds: 5, done: false, error: null, input: null,
     resources: [],
     streamingAgent: null, streamingRound: 0,
@@ -195,6 +197,7 @@ export async function startDebateStream(payload: DecisionInput): Promise<void> {
             state = {
               ...state,
               verdict: event.verdict,
+              timeline: (event.timeline as ChronologicalTimeline | null) || null,
               debateId: event.debate_id,
               completedRounds: event.completed_rounds,
               totalRounds: event.total_rounds,

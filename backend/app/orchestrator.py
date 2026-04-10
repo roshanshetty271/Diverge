@@ -12,6 +12,7 @@ Token-level streaming supported via QueueCallbackHandler.
 """
 
 import re
+import json
 import uuid
 import time
 import random
@@ -24,11 +25,18 @@ from strands import Agent
 from app.config import get_settings
 from app.agents.prompts import (
     get_rounds, detect_decision_category,
-    build_alpha_prompt, build_beta_prompt, build_verdict_prompt,
-    PERSONA_CHALLENGER, PERSONA_DEFENDER,
+    build_alpha_prompt, build_beta_prompt, build_verdict_prompt, build_timeline_simulator_prompt,
+    PERSONA_CHALLENGER, PERSONA_DEFENDER, PERSONA_EQUAL,
 )
 from app.agents.metrics import extract_metrics
-from app.schemas import RoundResult, RoundMetrics, DebateResponse
+from app.schemas import (
+    DebateResponse,
+    Resource,
+    RoundMetrics,
+    RoundResult,
+    StructuredTimeline,
+    TimelineExploreItem,
+)
 from app.tools.monte_carlo import monte_carlo_financial
 from app.tools.data_tools import get_salary_data, compare_cost_of_living, calculate_runway
 from app.tools.knowledge import research_insight
@@ -112,6 +120,20 @@ NON_RETRYABLE = ("ValidationException", "AccessDeniedException", "ResourceNotFou
 
 # In-memory interjection store: debate_id → list of interjection texts (one per round gap)
 _interjection_store: dict[str, list[str]] = {}
+
+
+def _log_debug_round_trace(round_num: int, round_name: str, alpha_response: str, beta_response: str):
+    """Emit full round outputs only in debug mode for local prompt testing."""
+    if not get_settings().debug:
+        return
+
+    logger.info(
+        "[debug-trace] round %s (%s) | alpha=%r | beta=%r",
+        round_num,
+        round_name,
+        alpha_response,
+        beta_response,
+    )
 
 
 def set_interjection(debate_id: str, text: str):
@@ -207,9 +229,321 @@ def _safe_agent_output(result) -> str:
     return _clean_ai_slop(text)
 
 
-def _assign_personas() -> tuple[dict, dict]:
-    """Keep alpha as the cautious voice and beta as the bold voice."""
-    return PERSONA_DEFENDER, PERSONA_CHALLENGER
+def _format_transcript_for_llm(transcript: list[RoundResult], user_ctx: dict) -> str:
+    """Format completed rounds into a compact transcript for downstream LLM steps."""
+    full_text = ""
+    for r in transcript:
+        if r.status == "completed":
+            full_text += f"\n--- Round {r.round_number}: {r.round_title} ---\n"
+            full_text += f"Path A ({user_ctx['path_a']}): {r.alpha}\n"
+            full_text += f"Path B ({user_ctx['path_b']}): {r.beta}\n"
+    return full_text.strip()
+
+
+def _strip_json_fences(text: str) -> str:
+    """Remove optional markdown fences around JSON."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    return cleaned.strip()
+
+
+def _get_round_time_jump(round_num: int) -> tuple[str, int | None]:
+    """Return the forced time jump label and years elapsed for a debate round."""
+    jumps: dict[int, tuple[str, int | None]] = {
+        0: ("EXACTLY 1 YEAR AFTER THE ORIGINAL DECISION", 1),
+        1: ("AT THE 3-YEAR MARK AFTER THE ORIGINAL DECISION", 3),
+        2: ("EXACTLY 5 YEARS AFTER THE ORIGINAL DECISION", 5),
+        3: ("EXACTLY 10 YEARS AFTER THE ORIGINAL DECISION", 10),
+        4: ("AT THE FINAL LOOK-BACK AFTER LIVING THE FULL CONSEQUENCES OF THIS PATH", None),
+    }
+    return jumps.get(round_num, (f"AT {round_num + 1} STAGES LATER IN THIS LIFE", None))
+
+
+def _build_chronology_guardrail(user_ctx: dict, round_info: dict, round_num: int) -> str:
+    """Force the model to honor time jumps, setting evolution, and detail decay."""
+    jump_label, years_elapsed = _get_round_time_jump(round_num)
+    age = user_ctx.get("age")
+    timeline = round_info.get("timeline", f"round {round_num + 1}")
+
+    if years_elapsed is not None:
+        if age is not None:
+            age_line = (
+                f"- The user was {age} at the original decision. In this round they are {age + years_elapsed}. "
+                f"They are exactly {years_elapsed} years older."
+            )
+        else:
+            age_line = f"- The user is exactly {years_elapsed} years older in this round."
+    else:
+        if age is not None:
+            age_line = (
+                f"- The user was {age} at the original decision. This round is the final look-back from a meaningfully older life stage."
+            )
+        else:
+            age_line = "- This round is the final look-back from a meaningfully older life stage."
+
+    setting_line = (
+        "- You are FORBIDDEN from keeping the character in the same physical setting as a previous round. "
+        "Do not leave them in the same room, same cafe, same office, same shower, same car, same kitchen, "
+        "same bed, or same conversation."
+        if round_num > 0
+        else "- This Year 1 scene is not a permanent set for the rest of the timeline. Do not lock future rounds into this exact room, outfit, or minute."
+    )
+
+    return (
+        "CHRONOLOGY ENFORCEMENT - FOLLOW THIS EXACTLY:\n"
+        f"- This round takes place {jump_label}. Treat the lived moment as {timeline}.\n"
+        f"{age_line}\n"
+        f"{setting_line}\n"
+        "- The environment MUST evolve to reflect the passage of time. Use a new scene, new objects, and new stakes that make the years feel real.\n"
+        "- If you revisit a familiar place, it must be obviously transformed by time and compounding consequences.\n"
+        "- Drop trivial carryover details from Year 1 and earlier rounds: exact clothes, exact chair, exact wall color, exact cup, exact sentence, exact weather, exact body posture.\n"
+        "- Carry forward only what compounds: money, health, leverage, intimacy, status, habit debt, regret, relief, freedom, isolation, confidence, exhaustion.\n"
+        "- This round must feel like a NEW chapter in the same life, not the same room frozen in time."
+    )
+
+
+def _get_chronological_awareness_window(round_num: int) -> str:
+    """Return the round-aware elapsed-time wording for system-prompt timeline references."""
+    windows = {
+        0: "1 year",
+        1: "3 years",
+        2: "5 years",
+        3: "10 years",
+        4: "all these years",
+    }
+    return windows.get(round_num, f"{round_num + 1} stages")
+
+
+def _build_chronological_awareness_rule(agent_name: str, round_num: int) -> str:
+    """Force the agent to weaponize or defend the widening timeline gap explicitly."""
+    elapsed_window = _get_chronological_awareness_window(round_num)
+
+    if agent_name.lower() == "alpha":
+        agent_specific_rule = (
+            f'- If you are Alpha, you must weaponize the timeline. Contrast your compounding growth over the last {elapsed_window} '
+            "with Beta's stagnation. "
+            "(e.g., 'It has been 3 years now. Look at what my choice built, while you are still stuck where we started.')"
+        )
+    else:
+        agent_specific_rule = (
+            f"- If you are Beta, you must defend your long-term reality based on the time passed, or express the compounding regret of the last {elapsed_window}."
+        )
+
+    return (
+        "CHRONOLOGICAL AWARENESS:\n"
+        "You must actively acknowledge the passage of time in your argument. Do not just describe your current state; "
+        "you must explicitly reference how much time has passed since Year 1 (The Fork).\n"
+        f"{agent_specific_rule}\n"
+        "- You MUST reference the timeline directly to show the widening gap between the two paths."
+    )
+
+
+def _build_round_system_prompt(
+    base_prompt: str,
+    user_ctx: dict,
+    round_info: dict,
+    round_num: int,
+    agent_name: str,
+) -> str:
+    """Append chronology guardrails and timeline-awareness directives to the round system prompt."""
+    chronology_guardrail = _build_chronology_guardrail(user_ctx, round_info, round_num)
+    chronological_awareness = _build_chronological_awareness_rule(agent_name, round_num)
+    return f"{base_prompt}\n\n{chronology_guardrail}\n\n{chronological_awareness}"
+
+
+def _build_runtime_wrapper_prompt(
+    debate_summary: str,
+    interjection: str | None,
+    path: str,
+    timeline: str,
+    prev_response: str,
+    chronology_guardrail: str,
+) -> str:
+    """Build the per-turn runtime wrapper that keeps agents grounded in the live exchange."""
+    summary_prefix = f"THE RECKONING SO FAR:\n{debate_summary}\n\n" if debate_summary else ""
+    interjection_prefix = (
+        "IMPORTANT USER CONTEXT FOR THIS ROUND:\n"
+        f'- The user just added this: "{interjection}" (Account for this explicitly in your reality).\n\n'
+        if interjection
+        else ""
+    )
+
+    return (
+        f"{chronology_guardrail}\n\n"
+        f"{summary_prefix}"
+        f"{interjection_prefix}"
+        f'You chose "{path}". You are living in {timeline}.\n\n'
+        "The version of you who chose the other path just described their reality:\n\n"
+        f"\"{prev_response}\"\n\n"
+        "YOUR TURN:\n"
+        "1. Start by directly addressing the exact scene or feeling they just described. "
+        "Name the illusion they are clinging to or the hidden cost they are ignoring in that specific moment.\n"
+        f"2. Then, pivot to YOUR reality right now at {timeline}.\n"
+        f'3. CRITICAL TIME RULE: Do NOT use the phrase "I remember" or tell a story in the past tense. '
+        f"You are living this moment RIGHT NOW in {timeline}. Make it visceral. "
+        "What are you looking at? What do you feel in your body?\n"
+        "4. CRITICAL SETTING RULE: You may not remain in the exact physical setting from a previous round. "
+        "Change the environment to prove time has passed.\n"
+        "5. CRITICAL DETAIL RULE: Drop trivial old details like clothes or exact rooms from earlier rounds. "
+        "Focus on the long-term compounding consequences."
+    )
+
+
+def _assign_personas(path_a: str, path_b: str) -> tuple[dict, dict]:
+    """Dynamically assign personas based on which path requires courage."""
+    from app.agents.prompts import detect_brave_path
+
+    brave_path = detect_brave_path(path_a, path_b)
+
+    if brave_path == "a":
+        return PERSONA_CHALLENGER, PERSONA_DEFENDER
+    elif brave_path == "b":
+        return PERSONA_DEFENDER, PERSONA_CHALLENGER
+    else:
+        return PERSONA_EQUAL, PERSONA_EQUAL
+
+
+def _resource_candidate_signature(resource: dict | TimelineExploreItem) -> tuple[str, str, str, str]:
+    """Normalize a candidate resource into a stable comparison key."""
+    if isinstance(resource, TimelineExploreItem):
+        return (
+            resource.type.strip().lower(),
+            resource.title.strip(),
+            resource.author.strip(),
+            resource.url.strip(),
+        )
+
+    return (
+        str(resource.get("type", "")).strip().lower(),
+        str(resource.get("title", "")).strip(),
+        str(resource.get("author", "")).strip(),
+        str(resource.get("url", "")).strip(),
+    )
+
+
+def _format_candidates_for_prompt(candidates: list[dict]) -> str:
+    """Serialize the vetted candidate list into a compact prompt-friendly JSON string."""
+    prompt_candidates = [
+        {
+            "type": candidate["type"],
+            "title": candidate["title"],
+            "author": candidate["author"],
+            "url": candidate["url"],
+            "catalog_why": candidate["why"],
+        }
+        for candidate in candidates
+    ]
+    return json.dumps(prompt_candidates, indent=2, ensure_ascii=False)
+
+
+def _build_stage06_fallback(user_ctx: dict) -> list[TimelineExploreItem]:
+    """Create deterministic fallback recommendations when stage-06 output is missing or invalid."""
+    fallback_resources = _get_resources(user_ctx)
+    return [
+        TimelineExploreItem(
+            type=resource.type,
+            title=resource.title,
+            author=resource.author,
+            why_it_helps=resource.why,
+            url=resource.url or "",
+        )
+        for resource in fallback_resources
+        if resource.url
+    ]
+
+
+def _finalize_structured_timeline(
+    timeline: StructuredTimeline,
+    user_ctx: dict,
+    candidates: list[dict],
+) -> StructuredTimeline:
+    """Validate stage-06 selections against vetted candidates and repair with fallback if needed."""
+    fallback_items = _build_stage06_fallback(user_ctx)
+    candidate_map = {_resource_candidate_signature(candidate): candidate for candidate in candidates}
+    valid_types = {"book", "video", "concept"}
+
+    items = list(timeline.stage_06_what_to_explore_next or [])
+    if len(items) != 3 or {item.type for item in items} != valid_types:
+        return timeline.model_copy(update={"stage_06_what_to_explore_next": fallback_items})
+
+    type_order = {"book": 0, "video": 1, "concept": 2}
+    normalized_items: list[TimelineExploreItem] = []
+
+    for item in sorted(items, key=lambda current: type_order.get(current.type, 99)):
+        key = _resource_candidate_signature(item)
+        candidate = candidate_map.get(key)
+        if not candidate or not item.why_it_helps.strip():
+            return timeline.model_copy(update={"stage_06_what_to_explore_next": fallback_items})
+
+        normalized_items.append(
+            TimelineExploreItem(
+                type=item.type,
+                title=candidate["title"],
+                author=candidate["author"],
+                why_it_helps=item.why_it_helps.strip(),
+                url=candidate["url"],
+            )
+        )
+
+    return timeline.model_copy(update={"stage_06_what_to_explore_next": normalized_items})
+
+
+def _generate_structured_timeline(transcript: list[RoundResult], user_ctx: dict) -> StructuredTimeline | None:
+    """Generate the strict timeline JSON used by the verdict timeline UI."""
+    full_text = _format_transcript_for_llm(transcript, user_ctx)
+    if not full_text:
+        return None
+
+    from app.data.resources import shortlist_resource_candidates
+
+    candidates = shortlist_resource_candidates(
+        user_ctx.get("path_a", ""),
+        user_ctx.get("path_b", ""),
+        user_ctx.get("constraints"),
+        max_candidates=12,
+    )
+    prompt = build_timeline_simulator_prompt(
+        user_ctx,
+        full_text,
+        _format_candidates_for_prompt(candidates),
+    )
+    settings = get_settings()
+
+    for attempt in range(2):
+        try:
+            if settings.model_provider == "openai":
+                from openai import OpenAI
+
+                client = OpenAI(api_key=settings.openai_api_key)
+                completion = client.beta.chat.completions.parse(
+                    model=settings.debate_model_id,
+                    temperature=0.4,
+                    max_completion_tokens=1800,
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": "Generate the structured timeline JSON now."},
+                    ],
+                    response_format=StructuredTimeline,
+                )
+                parsed = completion.choices[0].message.parsed
+                if parsed:
+                    return _finalize_structured_timeline(parsed, user_ctx, candidates)
+            else:
+                timeline_agent = Agent(
+                    model=_make_model(max_tokens=1800, temperature=0.4),
+                    system_prompt=prompt,
+                )
+                raw = timeline_agent("Generate the structured timeline JSON now.")
+                parsed = StructuredTimeline.model_validate_json(_strip_json_fences(str(raw)))
+                return _finalize_structured_timeline(parsed, user_ctx, candidates)
+        except Exception as e:
+            logger.error("Structured timeline generation attempt %s failed: %s", attempt + 1, e)
+            if attempt < 1:
+                time.sleep(1.5)
+
+    return None
 
 
 def _run_round(
@@ -227,19 +561,18 @@ def _run_round(
     alpha_response = ""
     beta_response = ""
 
-    summary_prefix = f"DEBATE SO FAR:\n{debate_summary}\n\n" if debate_summary else ""
-    interjection_prefix = (
-        "IMPORTANT USER CONTEXT FOR THIS ROUND:\n"
-        f"- The user just added this and you must account for it explicitly: \"{interjection}\"\n\n"
-        if interjection
-        else ""
-    )
-
     for attempt in range(MAX_RETRIES):
         try:
+            chronology_guardrail = _build_chronology_guardrail(user_ctx, round_info, round_num)
             alpha_agent = Agent(
                 model=_make_model(),
-                system_prompt=build_alpha_prompt(user_ctx, round_info, alpha_persona),
+                system_prompt=_build_round_system_prompt(
+                    build_alpha_prompt(user_ctx, round_info, alpha_persona),
+                    user_ctx,
+                    round_info,
+                    round_num,
+                    "Alpha",
+                ),
                 tools=tools,
             )
             path_a = user_ctx["path_a"]
@@ -248,21 +581,20 @@ def _run_round(
 
             if round_num == 0:
                 alpha_input = (
-                    f"{summary_prefix}"
-                    f"{interjection_prefix}"
-                    f"You chose \"{path_a}\". It's {timeline}. "
-                    f"Speak from one emotionally loaded moment that shows what choosing this path did to you. "
-                    f"Make it concrete."
+                    f"{chronology_guardrail}\n\n"
+                    f"You chose \"{path_a}\". You are living in {timeline} right now. "
+                    f"Do NOT use the phrase \"I remember\" or tell this in the past tense. "
+                    f"Speak from one emotionally loaded moment that makes this reality feel current, physical, and concrete. "
+                    f"Do not trap the rest of the timeline inside this exact room or trivial detail."
                 )
             else:
-                alpha_input = (
-                    f"{summary_prefix}"
-                    f"{interjection_prefix}"
-                    f"You chose \"{path_a}\". It's now {timeline}.\n\n"
-                    f"The version of you who chose \"{path_b}\" just said:\n\n"
-                    f"\"{prev_beta}\"\n\n"
-                    f"Do not spar line by line. Let what they said sharpen your own clarity. "
-                    f"Answer with quiet conviction from one emotionally loaded moment, and name the cost they are underestimating."
+                alpha_input = _build_runtime_wrapper_prompt(
+                    debate_summary=debate_summary,
+                    interjection=interjection,
+                    path=path_a,
+                    timeline=timeline,
+                    prev_response=prev_beta or "",
+                    chronology_guardrail=chronology_guardrail,
                 )
             raw_alpha = alpha_agent(alpha_input)
             alpha_response = validate_safe_content(validate_agent_output(_safe_agent_output(raw_alpha)))
@@ -272,17 +604,24 @@ def _run_round(
 
             beta_agent = Agent(
                 model=_make_model(),
-                system_prompt=build_beta_prompt(user_ctx, round_info, beta_persona),
+                system_prompt=_build_round_system_prompt(
+                    build_beta_prompt(user_ctx, round_info, beta_persona),
+                    user_ctx,
+                    round_info,
+                    round_num,
+                    "Beta",
+                ),
                 tools=tools,
             )
             raw_beta = beta_agent(
-                f"{summary_prefix}"
-                f"{interjection_prefix}"
-                f"You chose \"{path_b}\". It's now {timeline}.\n\n"
-                f"The version of you who chose \"{path_a}\" just said:\n\n"
-                f"\"{alpha_response}\"\n\n"
-                f"Do not spar line by line. Let what they said sharpen your own clarity. "
-                f"Answer with quiet conviction from one emotionally loaded moment, and name the cost they are underestimating."
+                _build_runtime_wrapper_prompt(
+                    debate_summary=debate_summary,
+                    interjection=interjection,
+                    path=path_b,
+                    timeline=timeline,
+                    prev_response=alpha_response,
+                    chronology_guardrail=chronology_guardrail,
+                )
             )
             beta_response = validate_safe_content(validate_agent_output(_safe_agent_output(raw_beta)))
 
@@ -292,6 +631,7 @@ def _run_round(
             debate_text = f"Path A argued:\n{alpha_response}\n\nPath B argued:\n{beta_response}"
             metrics = extract_metrics(debate_text)
             sentiment = analyze_round_sentiment(alpha_response, beta_response)
+            _log_debug_round_trace(round_num + 1, round_info["name"], alpha_response, beta_response)
 
             return RoundResult(
                 round_number=round_num + 1,
@@ -329,13 +669,7 @@ def _run_round(
 
 def _generate_verdict(transcript: list[RoundResult], user_ctx: dict) -> str:
     """Generate the final verdict from the debate transcript."""
-    full_text = ""
-    for r in transcript:
-        if r.status == "completed":
-            full_text += f"\n--- Round {r.round_number}: {r.round_title} ---\n"
-            full_text += f"Path A ({user_ctx['path_a']}): {r.alpha}\n"
-            full_text += f"Path B ({user_ctx['path_b']}): {r.beta}\n"
-
+    full_text = _format_transcript_for_llm(transcript, user_ctx)
     if not full_text.strip():
         return "The debate could not produce enough content for a verdict."
 
@@ -359,15 +693,20 @@ def _generate_verdict(transcript: list[RoundResult], user_ctx: dict) -> str:
     return "The verdict could not be generated. Please review the debate rounds above."
 
 
-def _get_resources(category: str) -> list:
-    """Get curated resources for the given category."""
+def _get_resources(user_context: dict) -> list[Resource]:
+    """Get diversified deterministic fallback resources for the current user context."""
     try:
-        from app.data.resources import get_resources_for_category
-        from app.schemas import Resource
-        raw = get_resources_for_category(category)
-        return [Resource(**r) for r in raw[:3]]
+        from app.data.resources import get_rotating_fallback_resources
+
+        raw = get_rotating_fallback_resources(
+            user_context.get("path_a", ""),
+            user_context.get("path_b", ""),
+            user_context.get("constraints"),
+            max_items=3,
+        )
+        return [Resource(**resource) for resource in raw]
     except Exception as e:
-        logger.warning(f"Failed to load resources for {category}: {e}")
+        logger.warning("Failed to load fallback resources: %s", e)
         return []
 
 
@@ -400,7 +739,7 @@ def run_debate(user_context: dict) -> DebateResponse:
 
     category = detect_decision_category(user_context["path_a"], user_context["path_b"])
     user_context["_category"] = category
-    alpha_persona, beta_persona = _assign_personas()
+    alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
 
@@ -425,8 +764,10 @@ def run_debate(user_context: dict) -> DebateResponse:
         logger.info(f"Debate {debate_id}: Round {i + 1} {result.status}")
 
     completed = [r for r in transcript if r.status == "completed"]
+    timeline = None
     if len(completed) >= 3:
         verdict = _generate_verdict(transcript, user_context)
+        timeline = _generate_structured_timeline(transcript, user_context)
     elif len(completed) >= 1:
         verdict = (
             f"Only {len(completed)} of 5 rounds completed successfully. "
@@ -439,12 +780,13 @@ def run_debate(user_context: dict) -> DebateResponse:
     elapsed = time.time() - start_time
     logger.info(f"Debate {debate_id} finished in {elapsed:.1f}s ({len(completed)}/{len(rounds)} rounds, category={category})")
 
-    resources = _get_resources(category)
+    resources = _get_resources(user_context)
 
     response = DebateResponse(
         debate_id=debate_id,
         transcript=transcript,
         verdict=verdict,
+        timeline=timeline,
         metrics=all_metrics,
         completed_rounds=len(completed),
         total_rounds=len(rounds),
@@ -470,7 +812,7 @@ def run_debate_streaming(user_context: dict):
 
     category = detect_decision_category(user_context["path_a"], user_context["path_b"])
     user_context["_category"] = category
-    alpha_persona, beta_persona = _assign_personas()
+    alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
 
@@ -495,8 +837,10 @@ def run_debate_streaming(user_context: dict):
         yield {"type": "round", "data": result.model_dump()}
 
     completed = [r for r in transcript if r.status == "completed"]
+    timeline = None
     if len(completed) >= 3:
         verdict = _generate_verdict(transcript, user_context)
+        timeline = _generate_structured_timeline(transcript, user_context)
     elif len(completed) >= 1:
         verdict = f"Only {len(completed)} of 5 rounds completed. Partial analysis."
     else:
@@ -505,11 +849,12 @@ def run_debate_streaming(user_context: dict):
     elapsed = time.time() - start_time
     logger.info(f"Streaming debate {debate_id} finished in {elapsed:.1f}s")
 
-    resources = _get_resources(category)
+    resources = _get_resources(user_context)
 
     yield {
         "type": "complete",
         "verdict": verdict,
+        "timeline": timeline.model_dump() if timeline else None,
         "debate_id": debate_id,
         "metrics": [m.model_dump() if m else None for m in all_metrics],
         "completed_rounds": len(completed),
@@ -558,7 +903,7 @@ def run_debate_token_streaming(user_context: dict):
 
     category = detect_decision_category(user_context["path_a"], user_context["path_b"])
     user_context["_category"] = category
-    alpha_persona, beta_persona = _assign_personas()
+    alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
 
@@ -594,16 +939,10 @@ def run_debate_token_streaming(user_context: dict):
             "round_title": round_info["title"],
         }
 
-        summary_prefix = f"DEBATE SO FAR:\n{debate_summary}\n\n" if debate_summary else ""
-        interjection_prefix = (
-            "IMPORTANT USER CONTEXT FOR THIS ROUND:\n"
-            f"- The user just added this and you must account for it explicitly: \"{interjection}\"\n\n"
-            if interjection
-            else ""
-        )
         path_a = user_context["path_a"]
         path_b = user_context["path_b"]
         timeline = round_info.get("timeline", f"round {i + 1}")
+        chronology_guardrail = _build_chronology_guardrail(user_context, round_info, i)
 
         # --- Alpha agent (streams tokens via queue) ---
         token_q: queue.Queue = queue.Queue()
@@ -612,21 +951,20 @@ def run_debate_token_streaming(user_context: dict):
 
         if i == 0:
             alpha_input = (
-                f"{summary_prefix}"
-                f"{interjection_prefix}"
-                f'You chose "{path_a}". It\'s {timeline}. '
-                f"Speak from one emotionally loaded moment that shows what choosing this path did to you. "
-                f"Make it concrete."
+                f"{chronology_guardrail}\n\n"
+                f'You chose "{path_a}". You are living in {timeline} right now. '
+                f'Do NOT use the phrase "I remember" or tell this in the past tense. '
+                f"Speak from one emotionally loaded moment that makes this reality feel current, physical, and concrete. "
+                f"Do not trap the rest of the timeline inside this exact room or trivial detail."
             )
         else:
-            alpha_input = (
-                f"{summary_prefix}"
-                f"{interjection_prefix}"
-                f'You chose "{path_a}". It\'s now {timeline}.\n\n'
-                f'The version of you who chose "{path_b}" just said:\n\n'
-                f'"{prev_beta}"\n\n'
-                f"Do not spar line by line. Let what they said sharpen your own clarity. "
-                f"Answer with quiet conviction from one emotionally loaded moment, and name the cost they are underestimating."
+            alpha_input = _build_runtime_wrapper_prompt(
+                debate_summary=debate_summary,
+                interjection=interjection,
+                path=path_a,
+                timeline=timeline,
+                prev_response=prev_beta or "",
+                chronology_guardrail=chronology_guardrail,
             )
 
         try:
@@ -637,7 +975,13 @@ def run_debate_token_streaming(user_context: dict):
             def run_alpha():
                 try:
                     text = _run_agent_with_streaming(
-                        build_alpha_prompt(user_context, round_info, alpha_persona),
+                        _build_round_system_prompt(
+                            build_alpha_prompt(user_context, round_info, alpha_persona),
+                            user_context,
+                            round_info,
+                            i,
+                            "Alpha",
+                        ),
                         alpha_input, tools, token_q, "alpha", i + 1,
                     )
                     alpha_result_holder.append(text)
@@ -672,14 +1016,13 @@ def run_debate_token_streaming(user_context: dict):
 
             # --- Beta agent (streams tokens via queue) ---
             beta_q: queue.Queue = queue.Queue()
-            beta_input = (
-                f"{summary_prefix}"
-                f"{interjection_prefix}"
-                f'You chose "{path_b}". It\'s now {timeline}.\n\n'
-                f'The version of you who chose "{path_a}" just said:\n\n'
-                f'"{alpha_response}"\n\n'
-                f"Do not spar line by line. Let what they said sharpen your own clarity. "
-                f"Answer with quiet conviction from one emotionally loaded moment, and name the cost they are underestimating."
+            beta_input = _build_runtime_wrapper_prompt(
+                debate_summary=debate_summary,
+                interjection=interjection,
+                path=path_b,
+                timeline=timeline,
+                prev_response=alpha_response,
+                chronology_guardrail=chronology_guardrail,
             )
 
             beta_result_holder: list[str] = []
@@ -688,7 +1031,13 @@ def run_debate_token_streaming(user_context: dict):
             def run_beta():
                 try:
                     text = _run_agent_with_streaming(
-                        build_beta_prompt(user_context, round_info, beta_persona),
+                        _build_round_system_prompt(
+                            build_beta_prompt(user_context, round_info, beta_persona),
+                            user_context,
+                            round_info,
+                            i,
+                            "Beta",
+                        ),
                         beta_input, tools, beta_q, "beta", i + 1,
                     )
                     beta_result_holder.append(text)
@@ -735,6 +1084,7 @@ def run_debate_token_streaming(user_context: dict):
                 sentiment=sentiment,
                 status="completed",
             )
+            _log_debug_round_trace(i + 1, round_info["name"], alpha_response, beta_response)
 
         except Exception as e:
             logger.warning(f"Token-streaming round {i + 1} failed: {type(e).__name__}: {e}")
@@ -765,6 +1115,7 @@ def run_debate_token_streaming(user_context: dict):
 
     # --- Verdict with streaming ---
     completed = [r for r in transcript if r.status == "completed"]
+    timeline = None
     if len(completed) >= 3:
         yield {"type": "verdict_start"}
         verdict_q: queue.Queue = queue.Queue()
@@ -811,6 +1162,7 @@ def run_debate_token_streaming(user_context: dict):
 
         v_thread.join(timeout=5)
         verdict = verdict_text_holder[0] if verdict_text_holder else "The verdict could not be generated."
+        timeline = _generate_structured_timeline(transcript, user_context)
     elif len(completed) >= 1:
         verdict = f"Only {len(completed)} of 5 rounds completed. Partial analysis."
     else:
@@ -819,11 +1171,12 @@ def run_debate_token_streaming(user_context: dict):
     elapsed = time.time() - start_time
     logger.info(f"Token-streaming debate {debate_id} finished in {elapsed:.1f}s")
 
-    resources = _get_resources(category)
+    resources = _get_resources(user_context)
 
     yield {
         "type": "complete",
         "verdict": verdict,
+        "timeline": timeline.model_dump() if timeline else None,
         "debate_id": debate_id,
         "metrics": [m.model_dump() if m else None for m in all_metrics],
         "completed_rounds": len(completed),

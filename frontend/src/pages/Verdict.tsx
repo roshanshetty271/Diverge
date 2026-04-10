@@ -21,7 +21,7 @@ import {
   removeLocalJournalEntry,
   saveLocalJournalEntry,
 } from "../utils/debateStorage";
-import type { Capabilities, DebateResponse, DecisionInput, Resource } from "../types";
+import type { Capabilities, ChronologicalTimeline, DebateResponse, DecisionInput, Resource } from "../types";
 
 const RE_BOLD = /\*\*/g;
 const RE_HEADINGS = /^#{1,6}\s+/gm;
@@ -57,6 +57,12 @@ const RESOURCE_CONFIG: Record<string, {
     iconColor: 'text-path-risk',
     borderColor: 'border-path-risk/30',
     badgeClass: 'bg-path-risk/10 text-path-risk'
+  },
+  concept: {
+    icon: 'psychology',
+    iconColor: 'text-ivory-dim',
+    borderColor: 'border-ivory-dim/30',
+    badgeClass: 'bg-ivory-dim/10 text-ivory-dim'
   },
   article: {
     icon: 'article',
@@ -108,6 +114,67 @@ function parseLifeSnapshot(verdictText: string, pathName: string): { label: stri
   return rows;
 }
 
+function parseLifeSnapshotBlock(block: string): { label: string; text: string }[] {
+  if (!block) return [];
+
+  const rows: { label: string; text: string }[] = [];
+  for (const label of TIMELINE_LABELS) {
+    const linePattern = new RegExp(`${label}\\s*:\\s*(.+)`, "i");
+    const match = block.match(linePattern);
+    if (match) {
+      rows.push({ label, text: stripMarkdown(match[1].trim()) });
+    }
+  }
+  return rows;
+}
+
+function mapStructuredTimelineRows(
+  timeline: ChronologicalTimeline | null | undefined,
+  pathKey: "path_a_safe" | "path_b_bet",
+): { label: string; text: string }[] {
+  if (!timeline) return [];
+
+  const rows = [
+    { label: "Year 1", text: timeline.stage_01_the_fork_year_1[pathKey] },
+    { label: "Year 3", text: timeline.stage_02_the_ledger_year_3[pathKey] },
+    { label: "Year 5", text: timeline.stage_03_the_mirror_year_5[pathKey] },
+    { label: "Year 10", text: timeline.stage_04_the_ghost_year_10[pathKey] },
+    { label: "Final Words", text: timeline.stage_05_the_knot_final_words[pathKey] },
+  ];
+
+  return rows
+    .map((row) => ({ label: row.label, text: stripMarkdown(row.text || "").trim() }))
+    .filter((row) => row.text.length > 0);
+}
+
+function mapTimelineRecommendations(
+  timeline: ChronologicalTimeline | null | undefined,
+): Resource[] {
+  if (!timeline?.stage_06_what_to_explore_next) return [];
+
+  return timeline.stage_06_what_to_explore_next
+    .map((item) => ({
+      type: item.type,
+      title: item.title,
+      author: item.author,
+      url: item.url,
+      why: stripMarkdown(item.why_it_helps || "").trim(),
+    }))
+    .filter((item) => item.title && item.author && item.why);
+}
+
+function extractNamedSections(verdictText: string, headerRegex: RegExp): { heading: string; body: string }[] {
+  const matches = Array.from(verdictText.matchAll(headerRegex));
+  return matches.map((match, index) => {
+    const start = (match.index ?? 0) + match[0].length;
+    const end = index + 1 < matches.length ? (matches[index + 1].index ?? verdictText.length) : verdictText.length;
+    return {
+      heading: stripMarkdown(match[1] || "").trim(),
+      body: verdictText.slice(start, end).trim(),
+    };
+  });
+}
+
 export default function Verdict() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -132,6 +199,7 @@ export default function Verdict() {
   const [chosenPath, setChosenPath] = useState<string | null>(null);
   const [choosingPath, setChoosingPath] = useState(false);
   const [blindSpotRevealed, setBlindSpotRevealed] = useState(false);
+  const [fullVerdictOpen, setFullVerdictOpen] = useState(false);
 
   useEffect(() => {
     if (!debate || !input || authLoading) return;
@@ -211,6 +279,10 @@ export default function Verdict() {
   }
 
   const verdictText = debate.verdict || "";
+  const structuredTimeline = debate.timeline || null;
+  const timelineVerdict = stripMarkdown(
+    structuredTimeline?.stage_05_the_knot_final_words?.verdict_path_of_least_regret || "",
+  );
   const pathAName = input?.path_a || "Option A";
   const pathBName = input?.path_b || "Option B";
 
@@ -243,12 +315,43 @@ export default function Verdict() {
   };
 
   const sectionSeparators = ["thing you", "hidden assumption", "not seeing", "blind spot", "question you"];
-  const winsA = extractPoints(parseSection(verdictText, ["Where staying wins", `Where ${pathAName} wins`, "Path A wins", "where option a wins"], [`Where ${pathBName}`, "Where jumping", "Path B wins", "where option b wins", ...sectionSeparators])).map(stripMarkdown);
-  const winsB = extractPoints(parseSection(verdictText, ["Where jumping wins", `Where ${pathBName} wins`, "Path B wins", "where option b wins"], sectionSeparators)).map(stripMarkdown);
-  const blindSpot = stripMarkdown(parseSection(verdictText, ["not seeing", "might not be seeing", "hidden assumption", "blind spot", "thing you're missing"], ["question you", "overall"]));
+  const orderedWinSections = extractNamedSections(
+    verdictText,
+    /^\s*(?:\*\*)?Where\s+(.+?)\s+Wins:(?:\*\*)?\s*$/gim,
+  );
+  const orderedSnapshotSections = extractNamedSections(
+    verdictText,
+    /^\s*(?:\*\*)?Life Snapshot\s*-\s*(.+?):(?:\*\*)?\s*$/gim,
+  );
+
+  const winsA = extractPoints(
+    parseSection(
+      verdictText,
+      ["Where staying wins", `Where ${pathAName} wins`, "Path A wins", "where option a wins"],
+      [`Where ${pathBName}`, "Where jumping", "Path B wins", "where option b wins", ...sectionSeparators],
+    ) || orderedWinSections[0]?.body || "",
+  ).map(stripMarkdown);
+  const winsB = extractPoints(
+    parseSection(
+      verdictText,
+      ["Where jumping wins", `Where ${pathBName} wins`, "Path B wins", "where option b wins"],
+      sectionSeparators,
+    ) || orderedWinSections[1]?.body || "",
+  ).map(stripMarkdown);
+  const blindSpot = stripMarkdown(
+    parseSection(verdictText, ["not seeing", "might not be seeing", "hidden assumption", "blind spot", "thing you're missing"], ["question you", "overall"]),
+  ) || timelineVerdict;
   const nextMove = stripMarkdown(parseSection(verdictText, ["your next move", "next move"], ["life snapshot", "\n\n**life"]));
-  const snapshotA = parseLifeSnapshot(verdictText, pathAName);
-  const snapshotB = parseLifeSnapshot(verdictText, pathBName);
+  const snapshotA = mapStructuredTimelineRows(structuredTimeline, "path_a_safe").length > 0
+    ? mapStructuredTimelineRows(structuredTimeline, "path_a_safe")
+    : parseLifeSnapshot(verdictText, pathAName).length > 0
+      ? parseLifeSnapshot(verdictText, pathAName)
+      : parseLifeSnapshotBlock(orderedSnapshotSections[0]?.body || "");
+  const snapshotB = mapStructuredTimelineRows(structuredTimeline, "path_b_bet").length > 0
+    ? mapStructuredTimelineRows(structuredTimeline, "path_b_bet")
+    : parseLifeSnapshot(verdictText, pathBName).length > 0
+      ? parseLifeSnapshot(verdictText, pathBName)
+      : parseLifeSnapshotBlock(orderedSnapshotSections[1]?.body || "");
   const hasTimeline = snapshotA.length >= 3 || snapshotB.length >= 3;
   const hasStructuredData = winsA.length > 0 || winsB.length > 0 || blindSpot.length > 20;
 
@@ -272,7 +375,13 @@ export default function Verdict() {
     }
   };
 
-  const resources: Resource[] = (debate.resources || []).slice(0, 3);
+  const resources: Resource[] = (() => {
+    const structuredRecommendations = mapTimelineRecommendations(structuredTimeline);
+    if (structuredRecommendations.length > 0) {
+      return structuredRecommendations.slice(0, 3);
+    }
+    return (debate.resources || []).slice(0, 3);
+  })();
 
   const handleEmailResults = async () => {
     if (!resultsEmail || resultsSending) return;
@@ -604,8 +713,32 @@ export default function Verdict() {
             </StaggerItem>
           )}
 
-          {!hasStructuredData && verdictText && (
-            <StaggerItem className="mt-8"><div className="text-ivory text-base leading-[1.75] whitespace-pre-line">{stripMarkdown(verdictText)}</div></StaggerItem>
+          {(verdictText || timelineVerdict) && (
+            <StaggerItem className="mt-10">
+              <div className="bg-surface rounded-lg border border-surface-light p-5">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-ivory-faint text-[10px] font-mono uppercase tracking-[0.25em] mb-1">
+                      Full Verdict
+                    </p>
+                    <p className="text-ivory-dim text-sm italic">
+                      Raw structured text from the verdict model
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setFullVerdictOpen((open) => !open)}
+                    className="px-4 py-2 rounded-lg text-xs font-medium border border-surface-light text-ivory-dim hover:border-ivory-dim hover:text-ivory transition-colors duration-200"
+                  >
+                    {fullVerdictOpen ? "Hide" : "Show"}
+                  </button>
+                </div>
+                {fullVerdictOpen && (
+                  <div className="mt-4 text-ivory text-base leading-[1.75] whitespace-pre-line">
+                    {stripMarkdown(verdictText || timelineVerdict)}
+                  </div>
+                )}
+              </div>
+            </StaggerItem>
           )}
 
           <StaggerItem className="mt-12 flex flex-wrap gap-3 justify-center">

@@ -38,17 +38,44 @@ export interface RoundResult {
 }
 
 export interface Resource {
-  type: "book" | "video" | "article" | "podcast";
+  type: "book" | "video" | "article" | "podcast" | "concept";
   title: string;
   author: string;
   url?: string | null;
   why: string;
 }
 
+export interface ChronologicalTimelineStage {
+  path_a_safe: string;
+  path_b_bet: string;
+}
+
+export interface ChronologicalTimelineFinalStage extends ChronologicalTimelineStage {
+  verdict_path_of_least_regret: string;
+}
+
+export interface ChronologicalTimelineExploreItem {
+  type: "book" | "video" | "concept";
+  title: string;
+  author: string;
+  why_it_helps: string;
+  url: string;
+}
+
+export interface ChronologicalTimeline {
+  stage_01_the_fork_year_1: ChronologicalTimelineStage;
+  stage_02_the_ledger_year_3: ChronologicalTimelineStage;
+  stage_03_the_mirror_year_5: ChronologicalTimelineStage;
+  stage_04_the_ghost_year_10: ChronologicalTimelineStage;
+  stage_05_the_knot_final_words: ChronologicalTimelineFinalStage;
+  stage_06_what_to_explore_next: ChronologicalTimelineExploreItem[];
+}
+
 export interface DebateResponse {
   debate_id: string;
   transcript: RoundResult[];
   verdict: string;
+  timeline?: ChronologicalTimeline | null;
   metrics: (RoundMetrics | null)[];
   completed_rounds: number;
   total_rounds: number;
@@ -60,6 +87,7 @@ export interface CheckpointedDebateResponse {
   debate_id: string;
   transcript: RoundResult[];
   verdict: string;
+  timeline?: ChronologicalTimeline | null;
   metrics: (RoundMetrics | null)[];
   completed_rounds: number;
   total_rounds: number;

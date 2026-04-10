@@ -18,6 +18,7 @@ function toDebateResponse(result: CheckpointedDebateResponse): DebateResponse {
     debate_id: result.debate_id,
     transcript: result.transcript,
     verdict: result.verdict || "",
+    timeline: result.timeline || null,
     metrics: result.metrics,
     completed_rounds: result.completed_rounds,
     total_rounds: result.total_rounds,

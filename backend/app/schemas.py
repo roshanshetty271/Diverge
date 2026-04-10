@@ -4,8 +4,9 @@ Best practice: separate schemas from routes. Use strict validation.
 All API contracts defined here — single source of truth.
 """
 
+from typing import Literal, Optional
+
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 # ── Request schemas ──────────────────────────────────────────────
@@ -115,11 +116,42 @@ class Resource(BaseModel):
     why: str
 
 
+class TimelineStage(BaseModel):
+    """One timeline stage with Path A and Path B lived realities."""
+    path_a_safe: str
+    path_b_bet: str
+
+
+class TimelineFinalStage(TimelineStage):
+    """Final timeline stage plus least-regret verdict."""
+    verdict_path_of_least_regret: str
+
+
+class TimelineExploreItem(BaseModel):
+    """A validated stage-06 recommendation item selected from vetted candidates."""
+    type: Literal["book", "video", "concept"]
+    title: str = Field(min_length=1)
+    author: str = Field(min_length=1)
+    why_it_helps: str = Field(min_length=1)
+    url: str = Field(min_length=1)
+
+
+class StructuredTimeline(BaseModel):
+    """Strict six-stage timeline contract used by the frontend timeline views."""
+    stage_01_the_fork_year_1: TimelineStage
+    stage_02_the_ledger_year_3: TimelineStage
+    stage_03_the_mirror_year_5: TimelineStage
+    stage_04_the_ghost_year_10: TimelineStage
+    stage_05_the_knot_final_words: TimelineFinalStage
+    stage_06_what_to_explore_next: list[TimelineExploreItem] = Field(min_length=3, max_length=3)
+
+
 class DebateResponse(BaseModel):
     """Complete debate response returned to the frontend."""
     debate_id: str
     transcript: list[RoundResult]
     verdict: str
+    timeline: Optional[StructuredTimeline] = None
     metrics: list[Optional[RoundMetrics]]
     completed_rounds: int
     total_rounds: int
@@ -177,6 +209,7 @@ class CheckpointedDebateResponse(BaseModel):
     debate_id: str
     transcript: list[RoundResult]
     verdict: str = ""
+    timeline: Optional[StructuredTimeline] = None
     metrics: list[Optional[RoundMetrics]]
     completed_rounds: int
     total_rounds: int
