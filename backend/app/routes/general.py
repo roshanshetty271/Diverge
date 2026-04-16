@@ -16,10 +16,12 @@ from app.db.dynamodb import (
     upsert_user_profile,
     update_debate_outcome,
     update_debate_reflection,
+    save_debate_feedback,
 )
 from app.schemas import (
     CapabilitiesResponse,
     ChoosePathRequest,
+    FeedbackRequest,
     ReflectionRequest,
     SaveDebateRequest,
     ShareDebateRequest,
@@ -267,3 +269,30 @@ def health_check(request: Request):
     if settings.debug:
         response["dependencies"] = deps
     return response
+
+
+@router.post("/debate/{debate_id}/feedback")
+def submit_feedback(debate_id: str, req: FeedbackRequest, request: Request):
+    """Submit feedback on a debate verdict. Saves to DynamoDB and emails the builder."""
+    check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="feedback")
+
+    now = datetime.now(timezone.utc).isoformat()
+    saved = save_debate_feedback(debate_id, req.rating, req.quote, now)
+
+    settings = get_settings()
+    if settings.ses_sender_email and settings.feedback_notify_email:
+        try:
+            from app.routes.email import _send_ses_email
+
+            subject = f"Diverge Feedback: {req.rating}"
+            body = (
+                f"Debate: {debate_id}\n"
+                f"Rating: {req.rating}\n"
+                f"Quote: {req.quote or '(none)'}\n"
+                f"Time: {now}\n"
+            )
+            _send_ses_email(settings.feedback_notify_email, subject, body)
+        except Exception as e:
+            logger.warning("Failed to send feedback notification: %s", e)
+
+    return {"status": "saved" if saved else "logged", "debate_id": debate_id}

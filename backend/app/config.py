@@ -67,8 +67,9 @@ class Settings(BaseSettings):
     # Turnstile CAPTCHA (anonymous debate starts)
     turnstile_secret_key: str = ""
 
-    # SES (check-in emails)
+    # SES (check-in emails + feedback notifications)
     ses_sender_email: str = ""
+    feedback_notify_email: str = ""
     ses_region: str = "us-east-1"
     checkins_table: str = "diverge-checkins"
     checkins_scheduler_enabled: bool = False

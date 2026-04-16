@@ -12,6 +12,7 @@ import {
   scheduleCheckin,
   shareDebate,
   choosePath,
+  submitFeedback,
 } from "../utils/api";
 import { generateDebatePdf } from "../utils/exportPdf";
 import {
@@ -207,6 +208,9 @@ export default function Verdict() {
   const [chosenPath, setChosenPath] = useState<string | null>(null);
   const [choosingPath, setChoosingPath] = useState(false);
   const [blindSpotRevealed, setBlindSpotRevealed] = useState(false);
+  const [feedbackRating, setFeedbackRating] = useState<string | null>(null);
+  const [feedbackQuote, setFeedbackQuote] = useState("");
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
   const [gutLeaning, setGutLeaning] = useState<string | null>(initialGutCheck?.leaning ?? null);
   const [gutFear, setGutFear] = useState(initialGutCheck?.fear ?? "");
   const [gutSubmitted, setGutSubmitted] = useState(initialGutCheck?.submitted ?? shouldSkipGutCheck);
@@ -715,6 +719,71 @@ export default function Verdict() {
                   Do this in the next 24 hours
                 </p>
               </div>
+            </StaggerItem>
+          )}
+
+          {/* Feedback */}
+          {!feedbackSubmitted && (
+            <StaggerItem className="mt-10">
+              <div className="border border-white/10 bg-surface/30 rounded-xl p-6 max-w-xl mx-auto">
+                <p className="text-path-risk text-[10px] font-mono uppercase tracking-[0.3em] mb-3 text-center">
+                  Early signal
+                </p>
+                <h3 className="font-display text-base text-ivory text-center mb-5" style={{ fontWeight: 400 }}>
+                  Did this change how you see it?
+                </h3>
+                {!feedbackRating ? (
+                  <div className="flex gap-3 justify-center">
+                    {[
+                      { value: "shifted", label: "Yes, it shifted something" },
+                      { value: "somewhat", label: "Somewhat" },
+                      { value: "no", label: "Not really" },
+                    ].map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setFeedbackRating(opt.value)}
+                        className="px-4 py-2.5 rounded-lg text-xs font-mono border border-white/10 text-gray-400 hover:border-path-risk/50 hover:text-ivory transition-colors cursor-pointer"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : !feedbackSubmitted ? (
+                  <div>
+                    <p className="text-ivory-dim text-sm text-center mb-3">In one line, what shifted?</p>
+                    <div className="flex gap-2 max-w-md mx-auto">
+                      <input
+                        type="text"
+                        value={feedbackQuote}
+                        onChange={(e) => setFeedbackQuote(e.target.value.slice(0, 140))}
+                        placeholder="Optional"
+                        className="flex-1 bg-transparent border-b border-white/10 text-ivory text-sm py-2 focus:outline-none focus:border-gray-500 placeholder:text-gray-600"
+                      />
+                      <button
+                        onClick={() => {
+                          setFeedbackSubmitted(true);
+                          if (debate?.debate_id) {
+                            submitFeedback(debate.debate_id, feedbackRating!, feedbackQuote).catch(() => {});
+                          }
+                        }}
+                        className="px-4 py-2 rounded-lg text-xs font-mono border border-path-risk text-path-risk hover:bg-path-risk hover:text-void transition-colors cursor-pointer"
+                      >
+                        Submit
+                      </button>
+                    </div>
+                    <p className="text-gray-500 text-xs text-center mt-2">
+                      {feedbackQuote.length} / 140
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            </StaggerItem>
+          )}
+          {feedbackSubmitted && (
+            <StaggerItem className="mt-10">
+              <p className="text-gray-500 text-sm italic text-center">
+                Thank you. Your perspective helps us build better decision tools.
+              </p>
             </StaggerItem>
           )}
 

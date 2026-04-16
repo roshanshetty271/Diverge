@@ -187,3 +187,10 @@ export async function reflectOnDebate(debateId: string, satisfaction: number, no
     headers: { Authorization: `Bearer ${token}` },
   });
 }
+
+export async function submitFeedback(debateId: string, rating: string, quote: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`${API_BASE}/api/debate/${debateId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ rating, quote }),
+  });
+}

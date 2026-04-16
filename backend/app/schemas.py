@@ -185,6 +185,12 @@ class ReflectionRequest(BaseModel):
     note: str = Field("", max_length=1000)
 
 
+class FeedbackRequest(BaseModel):
+    """Request to submit feedback on a debate verdict."""
+    rating: str = Field(..., pattern="^(shifted|somewhat|no)$")
+    quote: str = Field("", max_length=200)
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str

@@ -372,3 +372,22 @@ def update_debate_reflection(
     except Exception as e:
         logger.error(f"Failed to update reflection for {debate_id}: {e}")
         return False
+
+
+def save_debate_feedback(debate_id: str, rating: str, quote: str, submitted_at: str) -> bool:
+    """Save user feedback on a debate verdict."""
+    settings = get_settings()
+    table = _get_table(settings.debates_table)
+
+    try:
+        table.update_item(
+            Key={"debate_id": debate_id},
+            UpdateExpression="SET feedback_rating = :fr, feedback_quote = :fq, feedback_at = :fa",
+            ExpressionAttributeValues={
+                ":fr": rating, ":fq": quote, ":fa": submitted_at,
+            },
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save feedback for {debate_id}: {e}")
+        return False
