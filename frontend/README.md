@@ -14,11 +14,26 @@ npm install
 # Copy environment file
 cp .env.example .env
 
-# Start dev server
+# Start the local-first dev server
 npm run dev
 ```
 
 Open http://localhost:5173
+
+`npm run dev` keeps the browser on same-origin `/api` and lets Vite proxy requests to a local backend on `http://localhost:8000`.
+
+Start the backend in another terminal:
+
+```bash
+cd ../backend
+uvicorn app.main:app --reload --port 8000
+```
+
+If you want an explicit live AWS smoke test after local validation, run:
+
+```bash
+npm run dev:aws
+```
 
 ## Tech Stack
 

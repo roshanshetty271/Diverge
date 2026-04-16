@@ -186,12 +186,6 @@ Resources:
       Tracing: Active
       FunctionUrlConfig:
         AuthType: NONE
-        Cors:
-          AllowOrigins:
-            - http://localhost:5173
-            - !If [HasPublicAppUrl, !Ref PublicAppUrl, !Ref "AWS::NoValue"]
-          AllowMethods: ["POST"]
-          AllowHeaders: ["Content-Type", "Authorization"]
       Environment:
         Variables:
           DIVERGE_DEBATES_TABLE: !Ref DebatesTable

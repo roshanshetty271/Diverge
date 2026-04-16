@@ -78,6 +78,15 @@ npm run dev
 ```
 
 App runs at `http://localhost:5173`. Backend at `http://localhost:8000`.
+`npm run dev` is the local-first workflow: the browser stays on same-origin `/api`, and Vite proxies requests to the local FastAPI server.
+
+For a rare live AWS smoke test after local validation:
+```bash
+cd frontend
+npm run dev:aws
+```
+
+Deployed browsers should also stay same-origin. Vercel rewrites `/api/debate/start`, `/api/debate/session/*`, `/api/debate/stream*`, and `/api/debate/interject` to the long-running AWS Function URL, while the rest of `/api/*` goes to API Gateway. CloudFront should mirror that same path split once it is available.
 
 ## Sic Mundus Creatus Est.
 

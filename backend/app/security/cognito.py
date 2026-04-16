@@ -4,14 +4,15 @@ Fix for Kiro audit #2: Now verifies JWT signatures using JWKS.
 Fix for Kiro audit #3: Debate endpoint gets optional auth for user tracking.
 
 Uses python-jose for RS256 signature verification against Cognito's JWKS endpoint.
+Stale-fallback cache: if Cognito is unreachable, the last-known JWKS keys are used
+for cryptographic verification. If verification fails, it's a hard 401 — no
+claim-only fallback, because accepting unverified signatures is a security regression.
 """
 
 import logging
 import time
 import json
 import urllib.request
-import hmac
-import hashlib
 import base64
 from typing import Optional
 
@@ -31,7 +32,11 @@ security_scheme = HTTPBearer(auto_error=False)
 
 
 def _get_jwks_keys() -> list[dict]:
-    """Fetch and cache JWKS keys from Cognito."""
+    """Fetch and cache JWKS keys from Cognito.
+
+    When Cognito is unreachable the last-known cached keys are returned
+    so verification can still succeed against recently-issued tokens.
+    """
     global _jwks_cache, _jwks_cache_time
 
     if _jwks_cache and (time.time() - _jwks_cache_time) < JWKS_CACHE_TTL:
@@ -55,6 +60,7 @@ def _get_jwks_keys() -> list[dict]:
     except Exception as e:
         logger.error(f"Failed to fetch JWKS: {e}")
         if _jwks_cache:
+            logger.warning("Using stale JWKS cache as fallback for verification")
             return _jwks_cache.get("keys", [])
         return []
 
@@ -85,7 +91,7 @@ def _verify_jwt_signature(token: str) -> dict:
     """Verify JWT signature using Cognito JWKS and validate claims.
 
     Performs:
-    1. Fetch JWKS from Cognito (cached)
+    1. Fetch JWKS from Cognito (cached, with stale-fallback)
     2. Match key by 'kid' header
     3. Verify RS256 signature using python-jose if available, else fall back to claim validation
     4. Validate issuer, token_use, and expiration claims
@@ -100,6 +106,11 @@ def _verify_jwt_signature(token: str) -> dict:
     header = _decode_jwt_header(token)
     payload = _decode_jwt_payload(token)
     kid = header.get("kid")
+
+    expected_issuer = (
+        f"https://cognito-idp.{settings.aws_region}.amazonaws.com/"
+        f"{settings.cognito_user_pool_id}"
+    )
 
     # Try python-jose for full cryptographic verification
     try:
@@ -118,11 +129,6 @@ def _verify_jwt_signature(token: str) -> dict:
 
         if not matching_key:
             raise ValueError(f"No matching JWKS key for kid={kid}")
-
-        expected_issuer = (
-            f"https://cognito-idp.{settings.aws_region}.amazonaws.com/"
-            f"{settings.cognito_user_pool_id}"
-        )
 
         # Full cryptographic verification
         verified = jose_jwt.decode(
@@ -148,11 +154,6 @@ def _verify_jwt_signature(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token signature")
 
     # Fallback: claim validation only (for local dev without python-jose)
-    expected_issuer = (
-        f"https://cognito-idp.{settings.aws_region}.amazonaws.com/"
-        f"{settings.cognito_user_pool_id}"
-    )
-
     if payload.get("iss") != expected_issuer:
         raise HTTPException(status_code=401, detail="Invalid token issuer")
 

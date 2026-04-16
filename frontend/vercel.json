@@ -6,7 +6,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; form-action 'self' https://diverge-632757408483.auth.us-east-1.amazoncognito.com; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' https://8bkyvvrp4j.execute-api.us-east-1.amazonaws.com https://nj4y3i5l3ezxlr2cu2k2lemcn40qghrk.lambda-url.us-east-1.on.aws https://cognito-idp.us-east-1.amazonaws.com https://diverge-632757408483.auth.us-east-1.amazoncognito.com; media-src 'self' blob:; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
+          "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; form-action 'self' https://diverge-632757408483.auth.us-east-1.amazoncognito.com; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' https://cognito-idp.us-east-1.amazonaws.com https://diverge-632757408483.auth.us-east-1.amazoncognito.com; media-src 'self' blob:; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
         },
         {
           "key": "Strict-Transport-Security",
@@ -49,7 +49,31 @@
   ],
   "rewrites": [
     {
-      "source": "/((?!assets/|.*\\..*).*)",
+      "source": "/api/debate/start",
+      "destination": "https://nj4y3i5l3ezxlr2cu2k2lemcn40qghrk.lambda-url.us-east-1.on.aws/api/debate/start"
+    },
+    {
+      "source": "/api/debate/session/:path*",
+      "destination": "https://nj4y3i5l3ezxlr2cu2k2lemcn40qghrk.lambda-url.us-east-1.on.aws/api/debate/session/:path*"
+    },
+    {
+      "source": "/api/debate/stream",
+      "destination": "https://nj4y3i5l3ezxlr2cu2k2lemcn40qghrk.lambda-url.us-east-1.on.aws/api/debate/stream"
+    },
+    {
+      "source": "/api/debate/stream-tokens",
+      "destination": "https://nj4y3i5l3ezxlr2cu2k2lemcn40qghrk.lambda-url.us-east-1.on.aws/api/debate/stream-tokens"
+    },
+    {
+      "source": "/api/debate/interject",
+      "destination": "https://nj4y3i5l3ezxlr2cu2k2lemcn40qghrk.lambda-url.us-east-1.on.aws/api/debate/interject"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "https://8bkyvvrp4j.execute-api.us-east-1.amazonaws.com/prod/api/:path*"
+    },
+    {
+      "source": "/((?!api/|assets/|.*\\..*).*)",
       "destination": "/index.html"
     }
   ]

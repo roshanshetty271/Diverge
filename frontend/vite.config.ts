@@ -2,6 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+const LOCAL_BACKEND_TARGET = "http://localhost:8000";
+
 export default defineConfig({
   plugins: [
     react(),             // React Fast Refresh + JSX transform
@@ -12,10 +14,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    strictPort: true,
     // Dev proxy: /api calls go to FastAPI backend — avoids CORS in development
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: LOCAL_BACKEND_TARGET,
         changeOrigin: true,
       },
     },

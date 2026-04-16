@@ -458,13 +458,20 @@ def shortlist_resource_candidates(
     path_b: str,
     constraints: str | None = None,
     max_candidates: int = 12,
+    decision_category: str | None = None,
 ) -> list[dict]:
     """Build a small, deterministic candidate list for stage-06 prompting."""
-    selected = select_relevant_categories(path_a, path_b, constraints)
     scored_categories = [category for category, _ in _score_categories(path_a, path_b, constraints)]
+    
+    if decision_category:
+        selected = [decision_category.lower()]
+    else:
+        selected = select_relevant_categories(path_a, path_b, constraints)
 
     if selected:
-        ordered_categories = selected + ["general"]
+        ordered_categories = list(selected)
+        if "general" not in ordered_categories:
+            ordered_categories.append("general")
         ordered_categories.extend(
             category for category in scored_categories if category not in ordered_categories
         )
@@ -506,10 +513,16 @@ def get_rotating_fallback_resources(
     path_b: str,
     constraints: str | None = None,
     max_items: int = 3,
+    decision_category: str | None = None,
 ) -> list[dict]:
     """Return a diverse deterministic fallback recommendation trio."""
-    shortlist = shortlist_resource_candidates(path_a, path_b, constraints, max_candidates=12)
-    selected_categories = set(select_relevant_categories(path_a, path_b, constraints))
+    shortlist = shortlist_resource_candidates(path_a, path_b, constraints, max_candidates=12, decision_category=decision_category)
+    
+    if decision_category:
+        selected_categories = {decision_category.lower()}
+    else:
+        selected_categories = set(select_relevant_categories(path_a, path_b, constraints))
+        
     grouped: dict[str, list[dict]] = {resource_type: [] for resource_type in ELIGIBLE_TIMELINE_TYPES}
     for resource in shortlist:
         grouped.setdefault(resource["type"], []).append(resource)

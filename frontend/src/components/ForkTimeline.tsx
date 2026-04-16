@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface TimelineRow {
@@ -32,17 +32,17 @@ const LABEL_APPEAR = (delay: number) => ({
 
 export default function ForkTimeline({ pathAName, pathBName, snapshotA, snapshotB }: Props) {
   const [expandedNode, setExpandedNode] = useState<string | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
 
   if (snapshotA.length < 2 && snapshotB.length < 2) return null;
 
   const maxRows = Math.max(snapshotA.length, snapshotB.length, 3);
 
-  const textBoxW = 210;
-  const textBoxH = 90;
   const textGap = 22;
 
   const spreadX = 160;
-  const sideSpace = textBoxW + textGap + 10;
+  const sideSpace = 240;
   const W = sideSpace + spreadX + 120 + spreadX + sideSpace;
   const centerX = W / 2;
   const leftX = centerX - spreadX;
@@ -53,7 +53,7 @@ export default function ForkTimeline({ pathAName, pathBName, snapshotA, snapshot
   const labelGap = 50;
   const firstNodeY = forkY + labelGap + 40;
   const stepY = 100;
-  const totalH = firstNodeY + maxRows * stepY + textBoxH / 2 + 20;
+  const totalH = firstNodeY + maxRows * stepY + 60;
 
   const pathACurve = `M ${centerX} ${topY} L ${centerX} ${forkY} C ${centerX} ${forkY + 40}, ${leftX} ${forkY + 10}, ${leftX} ${forkY + labelGap}`;
   const pathBCurve = `M ${centerX} ${topY} L ${centerX} ${forkY} C ${centerX} ${forkY + 40}, ${rightX} ${forkY + 10}, ${rightX} ${forkY + labelGap}`;
@@ -62,9 +62,33 @@ export default function ForkTimeline({ pathAName, pathBName, snapshotA, snapshot
 
   const toggle = (key: string) => setExpandedNode((prev) => (prev === key ? null : key));
 
+  const svgToPixel = (svgX: number, svgY: number): { x: number; y: number } => {
+    const svg = svgRef.current;
+    const wrapper = wrapperRef.current;
+    if (!svg || !wrapper) return { x: 0, y: 0 };
+    const rect = svg.getBoundingClientRect();
+    const scaleX = rect.width / W;
+    const scaleY = rect.height / totalH;
+    return { x: svgX * scaleX, y: svgY * scaleY };
+  };
+
+  const popups: { key: string; side: "left" | "right"; svgX: number; svgY: number; text: string; color: string }[] = [];
+  for (let i = 0; i < maxRows; i++) {
+    const y = firstNodeY + i * stepY;
+    const snapA = snapshotA[i] || null;
+    const snapB = snapshotB[i] || null;
+    if (expandedNode === `a-${i}` && snapA) {
+      popups.push({ key: `a-${i}`, side: "left", svgX: leftX, svgY: y, text: snapA.text, color: "#4a6fa5" });
+    }
+    if (expandedNode === `b-${i}` && snapB) {
+      popups.push({ key: `b-${i}`, side: "right", svgX: rightX, svgY: y, text: snapB.text, color: "#d4a843" });
+    }
+  }
+
   return (
-    <div className="w-full overflow-x-auto">
+    <div ref={wrapperRef} className="w-full overflow-x-auto relative">
       <svg
+        ref={svgRef}
         viewBox={`0 0 ${W} ${totalH}`}
         className="w-full mx-auto"
         style={{ minWidth: 360 }}
@@ -161,28 +185,6 @@ export default function ForkTimeline({ pathAName, pathBName, snapshotA, snapshot
                 style={isExpandedA ? { filter: "drop-shadow(0 0 6px #4a6fa5)" } : {}}
               />
 
-              {/* Path A text - to the LEFT of the dot */}
-              <AnimatePresence>
-                {isExpandedA && snapA && (
-                  <motion.foreignObject
-                    x={leftX - textGap - textBoxW}
-                    y={y - textBoxH / 2}
-                    width={textBoxW}
-                    height={textBoxH}
-                    initial={{ opacity: 0, x: 10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: 10 }}
-                    transition={{ duration: 0.25 }}
-                  >
-                    <div className="h-full flex items-center justify-end">
-                      <p className="text-ivory text-xs leading-snug text-right bg-surface/90 border border-[#4a6fa5]/30 rounded-lg px-3 py-2">
-                        {snapA.text}
-                      </p>
-                    </div>
-                  </motion.foreignObject>
-                )}
-              </AnimatePresence>
-
               {/* --- Path B node --- */}
               {snapB && !isExpandedB && (
                 <circle cx={rightX} cy={y} r={7} fill="none" stroke="#d4a843" strokeWidth={1.5} opacity={0.4}>
@@ -198,32 +200,54 @@ export default function ForkTimeline({ pathAName, pathBName, snapshotA, snapshot
                 onClick={() => snapB && toggle(keyB)}
                 style={isExpandedB ? { filter: "drop-shadow(0 0 6px #d4a843)" } : {}}
               />
-
-              {/* Path B text - to the RIGHT of the dot */}
-              <AnimatePresence>
-                {isExpandedB && snapB && (
-                  <motion.foreignObject
-                    x={rightX + textGap}
-                    y={y - textBoxH / 2}
-                    width={textBoxW}
-                    height={textBoxH}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -10 }}
-                    transition={{ duration: 0.25 }}
-                  >
-                    <div className="h-full flex items-center justify-start">
-                      <p className="text-ivory text-xs leading-snug text-left bg-surface/90 border border-[#d4a843]/30 rounded-lg px-3 py-2">
-                        {snapB.text}
-                      </p>
-                    </div>
-                  </motion.foreignObject>
-                )}
-              </AnimatePresence>
             </g>
           );
         })}
       </svg>
+
+      {/* HTML overlays — rendered outside SVG so they auto-size */}
+      <AnimatePresence>
+        {popups.map((popup) => {
+          const pos = svgToPixel(popup.svgX, popup.svgY);
+          const gapPx = svgToPixel(textGap, 0).x;
+          const maxW = 220;
+
+          const style: React.CSSProperties = {
+            position: "absolute",
+            top: pos.y,
+            transform: "translateY(-50%)",
+            maxWidth: maxW,
+            zIndex: 10,
+          };
+
+          if (popup.side === "left") {
+            style.right = `calc(100% - ${pos.x}px + ${gapPx}px)`;
+          } else {
+            style.left = pos.x + gapPx;
+          }
+
+          return (
+            <motion.div
+              key={popup.key}
+              style={style}
+              initial={{ opacity: 0, x: popup.side === "left" ? 10 : -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: popup.side === "left" ? 10 : -10 }}
+              transition={{ duration: 0.25 }}
+            >
+              <p
+                className={`text-ivory text-xs leading-snug bg-surface/90 border rounded-lg px-3 py-2 ${
+                  popup.side === "left"
+                    ? "text-right border-[#4a6fa5]/30"
+                    : "text-left border-[#d4a843]/30"
+                }`}
+              >
+                {popup.text}
+              </p>
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
     </div>
   );
 }

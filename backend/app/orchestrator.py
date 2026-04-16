@@ -19,6 +19,7 @@ import random
 import logging
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from strands import Agent
 
@@ -629,8 +630,11 @@ def _run_round(
                 raise ValueError("Beta agent returned empty response")
 
             debate_text = f"Path A argued:\n{alpha_response}\n\nPath B argued:\n{beta_response}"
-            metrics = extract_metrics(debate_text)
-            sentiment = analyze_round_sentiment(alpha_response, beta_response)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                metrics_future = pool.submit(extract_metrics, debate_text)
+                sentiment_future = pool.submit(analyze_round_sentiment, alpha_response, beta_response)
+                metrics = metrics_future.result()
+                sentiment = sentiment_future.result()
             _log_debug_round_trace(round_num + 1, round_info["name"], alpha_response, beta_response)
 
             return RoundResult(
@@ -1071,8 +1075,11 @@ def run_debate_token_streaming(user_context: dict):
             yield {"type": "agent_done", "agent": "beta", "round": i + 1}
 
             debate_text = f"Path A argued:\n{alpha_response}\n\nPath B argued:\n{beta_response}"
-            metrics = extract_metrics(debate_text)
-            sentiment = analyze_round_sentiment(alpha_response, beta_response)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                metrics_future = pool.submit(extract_metrics, debate_text)
+                sentiment_future = pool.submit(analyze_round_sentiment, alpha_response, beta_response)
+                metrics = metrics_future.result()
+                sentiment = sentiment_future.result()
 
             result = RoundResult(
                 round_number=i + 1,

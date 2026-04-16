@@ -39,6 +39,9 @@ export const TEMPLATES: TemplateOption[] = [
   { id: "education", title: "Education", question: "Should I study or keep working?", pathA: "Keep working", pathB: "Go back to school", category: "financial" },
   { id: "relationship", title: "Relationship", question: "Should I say something or let it go?", pathA: "Say what I feel", pathB: "Keep it to myself", category: "personal" },
   { id: "lifestyle", title: "Lifestyle Change", question: "Should I make the change or stay comfortable?", pathA: "Commit to the change", pathB: "Keep things as they are", category: "personal" },
+  { id: "volunteer", title: "Give Back", question: "How should I serve my community?", pathA: "Volunteer locally with what I know", pathB: "Go where the need is greatest", category: "personal" },
+  { id: "trade", title: "Trade vs. Degree", question: "What's the smartest path forward?", pathA: "Learn a skilled trade", pathB: "Pursue a 4-year degree", category: "financial" },
+  { id: "family", title: "Family Crossroads", question: "How do I balance what I want with what they need?", pathA: "Prioritize family stability", pathB: "Take the risk for a better future", category: "personal" },
 ];
 
 export const ROUNDS: RoundInfo[] = [
@@ -61,12 +64,15 @@ export const CRISIS_RESOURCES = [
   { name: "International Crisis Lines", action: "Find your country", url: "https://findahelpline.com", available: "Worldwide" },
 ];
 
-// In dev, Vite proxy handles /api/* → localhost:8000 (see vite.config.ts)
-// In prod, VITE_API_URL points to CloudFront or API Gateway
-export const API_BASE: string = normalizeServiceUrl(import.meta.env.VITE_API_URL);
+// Default browser behavior is same-origin /api via Vite/Vercel/CloudFront rewrites.
+// Set VITE_API_MODE=direct only for explicit live AWS smoke tests.
+const USE_DIRECT_API = import.meta.env.VITE_API_MODE === "direct";
 
-// Debate uses a separate Lambda Function URL (5-min timeout vs API Gateway's 29s)
-// Falls back to API_BASE when served behind CloudFront (which proxies both)
-export const DEBATE_BASE: string = normalizeServiceUrl(import.meta.env.VITE_DEBATE_URL) || API_BASE;
+export const API_BASE: string = USE_DIRECT_API ? normalizeServiceUrl(import.meta.env.VITE_API_URL) : "";
+
+// Long-running debate routes can still use a separate origin in direct smoke-test mode.
+export const DEBATE_BASE: string = USE_DIRECT_API
+  ? normalizeServiceUrl(import.meta.env.VITE_DEBATE_URL) || API_BASE
+  : API_BASE;
 
 export const CHECKPOINTED_DEBATE_ENABLED: boolean = import.meta.env.VITE_CHECKPOINTED_DEBATE === "true";

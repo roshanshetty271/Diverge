@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:local-backend": "vite --mode localbackend",
+    "dev:aws": "vite --mode aws",
+    "dev:local-backend": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"

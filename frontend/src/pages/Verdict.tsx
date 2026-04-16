@@ -200,6 +200,9 @@ export default function Verdict() {
   const [choosingPath, setChoosingPath] = useState(false);
   const [blindSpotRevealed, setBlindSpotRevealed] = useState(false);
   const [fullVerdictOpen, setFullVerdictOpen] = useState(false);
+  const [gutLeaning, setGutLeaning] = useState<string | null>(null);
+  const [gutFear, setGutFear] = useState("");
+  const [gutSubmitted, setGutSubmitted] = useState(false);
 
   useEffect(() => {
     if (!debate || !input || authLoading) return;
@@ -286,6 +289,8 @@ export default function Verdict() {
   const pathAName = input?.path_a || "Option A";
   const pathBName = input?.path_b || "Option B";
 
+  const RE_HEADING_BOUNDARY = /\n\s*(?:\*\*[A-Z]|#{1,6}\s+[A-Z])/;
+
   const parseSection = (text: string, markers: string[], endMarkers: string[]): string => {
     if (!text) return "";
     const lowerText = text.toLowerCase();
@@ -294,10 +299,14 @@ export default function Verdict() {
       if (idx === -1) continue;
       const after = text.slice(idx + marker.length).replace(RE_LEADING_SEPARATOR, "");
       let best = after;
+      const headingMatch = after.match(RE_HEADING_BOUNDARY);
+      if (headingMatch && headingMatch.index != null && headingMatch.index > 0) {
+        best = after.slice(0, headingMatch.index);
+      }
       for (const end of endMarkers) {
         if (!end) continue;
-        const endIdx = after.toLowerCase().indexOf(end.toLowerCase());
-        if (endIdx > 0 && endIdx < best.length) best = after.slice(0, endIdx);
+        const endIdx = best.toLowerCase().indexOf(end.toLowerCase());
+        if (endIdx > 0 && endIdx < best.length) best = best.slice(0, endIdx);
       }
       const result = best.trim();
       if (result.length > 5) return result;
@@ -342,16 +351,16 @@ export default function Verdict() {
     parseSection(verdictText, ["not seeing", "might not be seeing", "hidden assumption", "blind spot", "thing you're missing"], ["question you", "overall"]),
   ) || timelineVerdict;
   const nextMove = stripMarkdown(parseSection(verdictText, ["your next move", "next move"], ["life snapshot", "\n\n**life"]));
-  const snapshotA = mapStructuredTimelineRows(structuredTimeline, "path_a_safe").length > 0
-    ? mapStructuredTimelineRows(structuredTimeline, "path_a_safe")
-    : parseLifeSnapshot(verdictText, pathAName).length > 0
-      ? parseLifeSnapshot(verdictText, pathAName)
-      : parseLifeSnapshotBlock(orderedSnapshotSections[0]?.body || "");
-  const snapshotB = mapStructuredTimelineRows(structuredTimeline, "path_b_bet").length > 0
-    ? mapStructuredTimelineRows(structuredTimeline, "path_b_bet")
-    : parseLifeSnapshot(verdictText, pathBName).length > 0
-      ? parseLifeSnapshot(verdictText, pathBName)
-      : parseLifeSnapshotBlock(orderedSnapshotSections[1]?.body || "");
+  const snapshotA = parseLifeSnapshot(verdictText, pathAName).length > 0
+    ? parseLifeSnapshot(verdictText, pathAName)
+    : parseLifeSnapshotBlock(orderedSnapshotSections[0]?.body || "").length > 0
+      ? parseLifeSnapshotBlock(orderedSnapshotSections[0]?.body || "")
+      : mapStructuredTimelineRows(structuredTimeline, "path_a_safe");
+  const snapshotB = parseLifeSnapshot(verdictText, pathBName).length > 0
+    ? parseLifeSnapshot(verdictText, pathBName)
+    : parseLifeSnapshotBlock(orderedSnapshotSections[1]?.body || "").length > 0
+      ? parseLifeSnapshotBlock(orderedSnapshotSections[1]?.body || "")
+      : mapStructuredTimelineRows(structuredTimeline, "path_b_bet");
   const hasTimeline = snapshotA.length >= 3 || snapshotB.length >= 3;
   const hasStructuredData = winsA.length > 0 || winsB.length > 0 || blindSpot.length > 20;
 
@@ -456,10 +465,84 @@ export default function Verdict() {
     }
   };
 
+  if (!gutSubmitted) {
+    return (
+      <div className="min-h-screen bg-void px-6 py-16 flex items-center justify-center">
+        <div className="max-w-lg w-full border border-white/10 bg-surface/30 rounded-xl p-8">
+          <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-ivory-faint text-center mb-6">
+            Before the verdict
+          </p>
+          <h2 className="font-display text-lg text-ivory text-center mb-8">
+            Which way are you leaning right now?
+          </h2>
+          <div className="flex gap-4 justify-center mb-8">
+            <button
+              onClick={() => setGutLeaning(pathAName)}
+              className={`px-5 py-3 rounded-lg border text-sm font-mono transition-all ${
+                gutLeaning === pathAName
+                  ? "border-path-safe text-path-safe shadow-[0_0_12px_rgba(74,111,165,0.2)]"
+                  : "border-white/10 text-ivory-faint hover:border-path-safe/50"
+              }`}
+            >
+              {pathAName}
+            </button>
+            <button
+              onClick={() => setGutLeaning(pathBName)}
+              className={`px-5 py-3 rounded-lg border text-sm font-mono transition-all ${
+                gutLeaning === pathBName
+                  ? "border-path-risk text-path-risk shadow-[0_0_12px_rgba(212,168,67,0.2)]"
+                  : "border-white/10 text-ivory-faint hover:border-path-risk/50"
+              }`}
+            >
+              {pathBName}
+            </button>
+          </div>
+          <div className="mb-8">
+            <label className="block text-ivory/70 text-sm mb-2">
+              What&apos;s the one thing you&apos;re most afraid of?{" "}
+              <span className="text-ivory-faint/40 text-[11px]">(optional)</span>
+            </label>
+            <textarea
+              value={gutFear}
+              onChange={(e) => setGutFear(e.target.value.slice(0, 200))}
+              placeholder="The thing you keep coming back to..."
+              className="w-full bg-transparent border-b border-white/10 text-ivory text-sm py-2 resize-none focus:outline-none focus:border-ivory-faint/40 placeholder:text-ivory-faint/30"
+              rows={2}
+            />
+            <div className="flex justify-between mt-1">
+              <p className="text-[10px] text-ivory-faint/30">This stays on your device. It&apos;s never sent anywhere.</p>
+              <p className="text-[10px] font-mono text-ivory-faint/30">{gutFear.length} / 200</p>
+            </div>
+          </div>
+          <button
+            disabled={!gutLeaning}
+            onClick={() => setGutSubmitted(true)}
+            className="w-full py-3 rounded-lg bg-path-risk/90 text-void text-sm font-semibold uppercase tracking-wider hover:bg-path-risk transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Show me the verdict
+          </button>
+          <p className="text-[11px] text-ivory-faint/50 text-center mt-4 leading-relaxed">
+            This helps you notice if the AI confirmed what you already believed<br />
+            vs. genuinely shifted your thinking.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-void px-6 py-16">
       <div className="max-w-5xl mx-auto">
         <StaggerGroup>
+          {/* Gut-check reminder */}
+          {gutLeaning && (
+            <StaggerItem className="text-center mb-4">
+              <p className="text-[11px] font-mono text-ivory-faint/50">
+                You came in leaning toward <span className="text-ivory-faint">{gutLeaning}</span>
+              </p>
+            </StaggerItem>
+          )}
+
           {/* Dramatic Header Section */}
           <StaggerItem className="text-center mb-12">
             <h1 className="font-display text-4xl md:text-5xl font-bold text-ivory uppercase tracking-[0.15em] mb-2">
@@ -825,7 +908,31 @@ export default function Verdict() {
             </StaggerItem>
           )}
 
-          <StaggerItem className="mt-16 text-center">
+          {/* Ethical stance */}
+          <StaggerItem className="mt-16 border-t border-white/5 pt-8">
+            <div className="max-w-lg mx-auto text-center">
+              <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-ivory-faint mb-4">
+                &mdash;&mdash; About this analysis &mdash;&mdash;
+              </p>
+              <p className="text-[12px] text-ivory-faint/70 leading-relaxed mb-4">
+                Diverge is a thinking tool, not an oracle. It does not pick a side.
+              </p>
+              <ul className="text-[12px] text-ivory-faint/60 leading-relaxed text-left max-w-sm mx-auto space-y-1 mb-4">
+                <li>&bull; All metrics are AI estimates extracted from debate arguments</li>
+                <li>&bull; Quantitative tools inform the debate, not the scores</li>
+                <li>&bull; Your lived experience matters more than any model output</li>
+                <li>&bull; This is not therapy, medical, or legal advice</li>
+              </ul>
+              <p className="text-[11px] text-ivory-faint/50">
+                In crisis?{" "}
+                <a href="tel:988" className="text-path-risk hover:underline">Call 988</a>
+                {" "}or text HOME to{" "}
+                <a href="sms:741741" className="text-path-risk hover:underline">741741</a>
+              </p>
+            </div>
+          </StaggerItem>
+
+          <StaggerItem className="mt-10 text-center">
             <p className="font-display text-sm text-ivory-dim italic">Sic Mundus Creatus Est.</p>
             <p className="text-ivory-faint/50 text-xs italic mt-1">Thus your world is created.</p>
           </StaggerItem>

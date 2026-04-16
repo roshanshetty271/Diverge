@@ -1,4 +1,18 @@
 import { useNavigate } from "react-router-dom";
+import { StaggerGroup, StaggerItem } from "../components/Stagger";
+
+const COMPARISONS = [
+  { label: "ChatGPT\n/ Claude", statement: "ChatGPT can roleplay.", emphasis: "Diverge runs a decision protocol with real data and a record you keep." },
+  { label: "Decision\nMatrices", statement: "Decision matrices score what you already know.", emphasis: "Diverge surfaces what you\u2019re avoiding." },
+  { label: "AI\nJournals", statement: "Journaling helps you understand yourself.", emphasis: "Diverge helps you choose." },
+  { label: "Pros &\nCons", statement: "Spreadsheets show what\u2019s obvious.", emphasis: "Diverge shows what you\u2019re rationalizing." },
+];
+
+const EARLY_QUOTES = [
+  { text: "I knew what I wanted. I just needed to hear myself say it.", context: "Career decision" },
+  { text: "The blind spot card wrecked me. In the best way.", context: "Relocation decision" },
+  { text: "I\u2019ve never seen an AI tool that asks what I\u2019m afraid of before giving me the answer.", context: "Education decision" },
+];
 
 export default function Landing() {
   const navigate = useNavigate();
@@ -16,7 +30,7 @@ export default function Landing() {
             The 2 AM <span className="text-path-risk glow-amber">Crossroads</span>
           </h1>
           <p className="text-lg md:text-xl text-gray-400 font-light mb-10 max-w-2xl mx-auto leading-relaxed">
-            Career pivot or stay put? New city or familiar ground? Your mind is a maze of &ldquo;what ifs.&rdquo; We are the exit.
+            Career pivot or stay put? Degree or trade? New city or deep roots? Your family or your dream? Two versions of your future argue it out&mdash;with real data, real stakes, and no easy answers.
           </p>
           <div className="flex items-center justify-center">
             <button
@@ -27,6 +41,24 @@ export default function Landing() {
             </button>
           </div>
         </div>
+      </section>
+
+      {/* Use-case strip */}
+      <section className="border-y border-white/5 py-4">
+        <div className="flex flex-wrap justify-center gap-x-6 gap-y-2 text-[10px] font-mono uppercase tracking-[0.2em] text-ivory-faint/50">
+          <span>Career Transitions</span>
+          <span className="text-white/10">&middot;</span>
+          <span>Education Paths</span>
+          <span className="text-white/10">&middot;</span>
+          <span>Family Decisions</span>
+          <span className="text-white/10">&middot;</span>
+          <span>Community Impact</span>
+          <span className="text-white/10">&middot;</span>
+          <span>Life Changes</span>
+        </div>
+        <p className="text-center text-[11px] text-ivory-faint/40 mt-2">
+          For individuals making hard choices. For mentors guiding them.
+        </p>
       </section>
 
       {/* Core Value Prop */}
@@ -103,6 +135,28 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* Why Diverge? */}
+      <section className="py-20 bg-void">
+        <div className="max-w-2xl mx-auto px-6">
+          <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-ivory-faint/50 text-center mb-10">
+            Why not just use&hellip;
+          </p>
+          <StaggerGroup>
+            {COMPARISONS.map((c) => (
+              <StaggerItem key={c.label} className="flex items-start gap-6 mb-7">
+                <div className="min-w-[7rem] border border-white/10 rounded-lg px-3 py-2.5 text-center text-[11px] font-mono uppercase text-ivory-faint/60 whitespace-pre-line leading-tight flex-shrink-0">
+                  {c.label}
+                </div>
+                <p className="text-ivory/60 text-sm leading-relaxed pt-1">
+                  {c.statement}{" "}
+                  <span className="text-ivory font-medium">{c.emphasis}</span>
+                </p>
+              </StaggerItem>
+            ))}
+          </StaggerGroup>
+        </div>
+      </section>
+
       {/* The 5 Rounds */}
       <section id="rounds" className="py-24 bg-[#050505]">
         <div className="max-w-7xl mx-auto px-6">
@@ -153,6 +207,27 @@ export default function Landing() {
               <p className="text-[10px] text-gray-500 uppercase mb-3 tracking-tighter">Final Words</p>
               <p className="text-xs text-gray-400">The verdict. Both timelines make their closing argument. You choose The Path of Least Regret.</p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Social Proof */}
+      <section className="py-16 bg-void">
+        <div className="max-w-xl mx-auto px-6 text-center">
+          <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-ivory-faint/50 mb-8">
+            What early testers said
+          </p>
+          <div className="space-y-6">
+            {EARLY_QUOTES.map((q) => (
+              <div key={q.context}>
+                <p className="text-ivory/60 text-sm italic leading-relaxed">
+                  &ldquo;{q.text}&rdquo;
+                </p>
+                <p className="text-[11px] font-mono text-ivory-faint/40 mt-1">
+                  &mdash; {q.context}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       </section>

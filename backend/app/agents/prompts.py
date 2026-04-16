@@ -595,6 +595,7 @@ CRITICAL MAPPING RULE:
 WRITING RULES:
 - Each field should be 1-3 sentences, concrete and visceral.
 - Make the time jump unmistakable: Year 1, Year 3, Year 5, Year 10, Final Words.
+- HARD TIME JUMP: Stage 1 takes place EXACTLY 1 YEAR (365 days) after the decision. Do NOT describe the day the decision was made. Do NOT describe the immediate adrenaline or aftermath. Fast-forward a full year and describe their new, compounded daily reality and the friction or success they are experiencing 12 months later.
 - Focus on body, room, money, silence, relationships, pressure, relief, regret, identity.
 - Be specific. Avoid abstraction.
 - Do not mention the schema, timestamps, or instructions in the output.
