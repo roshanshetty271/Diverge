@@ -13,6 +13,11 @@ import { calculateProgress } from "../utils/loadingHelpers";
 import { CHECKPOINTED_DEBATE_ENABLED } from "../utils/constants";
 import type { CheckpointedDebateResponse, DecisionInput, DebateResponse } from "../types";
 
+interface LoadingRouteState {
+  input: DecisionInput;
+  captchaToken?: string | null;
+}
+
 function toDebateResponse(result: CheckpointedDebateResponse): DebateResponse {
   return {
     debate_id: result.debate_id,
@@ -29,7 +34,9 @@ function toDebateResponse(result: CheckpointedDebateResponse): DebateResponse {
 export default function Loading() {
   const location = useLocation();
   const navigate = useNavigate();
-  const payload = location.state as DecisionInput | null;
+  const routeState = (location.state || null) as DecisionInput | LoadingRouteState | null;
+  const payload = routeState && "input" in routeState ? routeState.input : routeState;
+  const captchaToken = routeState && "input" in routeState ? routeState.captchaToken ?? null : null;
   const [roundCount, setRoundCount] = useState(0);
   const [streamingRound, setStreamingRound] = useState(0);
   const [done, setDone] = useState(false);
@@ -53,7 +60,7 @@ export default function Loading() {
       resetDebateStream();
       if (CHECKPOINTED_DEBATE_ENABLED) {
         checkpointedAbort.current = new AbortController();
-        void startCheckpointedDebate(payload, checkpointedAbort.current.signal)
+        void startCheckpointedDebate(payload, checkpointedAbort.current.signal, captchaToken)
           .then((result) => {
             const maybeCrisis = result as unknown as { type?: string };
             if (maybeCrisis.type === "crisis" && !hasNavigated.current) {
@@ -87,7 +94,7 @@ export default function Loading() {
             checkpointedAbort.current = null;
           });
       } else {
-        startDebateStream(payload);
+        void startDebateStream(payload, captchaToken);
       }
     }
 

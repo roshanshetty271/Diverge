@@ -335,7 +335,7 @@ def _build_chronological_awareness_rule(agent_name: str, round_num: int) -> str:
     return (
         "CHRONOLOGICAL AWARENESS:\n"
         "You must actively acknowledge the passage of time in your argument. Do not just describe your current state; "
-        "you must explicitly reference how much time has passed since Year 1 (The Fork).\n"
+        "you must explicitly reference how much time has passed since the decision was made.\n"
         f"{agent_specific_rule}\n"
         "- You MUST reference the timeline directly to show the widening gap between the two paths."
     )

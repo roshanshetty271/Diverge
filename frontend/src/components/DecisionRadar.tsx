@@ -61,7 +61,7 @@ export default function DecisionRadar({ metricsA, metricsB, pathAName = "Option 
       <div className="mt-3 border-t border-white/5 pt-3">
         <button
           onClick={() => setShowMethodology(!showMethodology)}
-          className="text-[11px] font-mono text-ivory-faint/50 hover:text-ivory-faint transition-colors w-full text-center"
+          className="text-[11px] font-mono text-gray-500 hover:text-gray-300 transition-colors w-full text-center"
         >
           How these numbers work {showMethodology ? "\u25B4" : "\u25BE"}
         </button>
@@ -69,12 +69,12 @@ export default function DecisionRadar({ metricsA, metricsB, pathAName = "Option 
           <div className="mt-3 space-y-1.5 max-w-xs mx-auto">
             {METRIC_INFO.map((m) => (
               <div key={m.label} className="flex items-baseline gap-2 text-[11px] font-mono">
-                <span className="text-ivory-faint">{"\u25C7"}</span>
-                <span className="text-ivory-faint min-w-[5rem]">{m.label}</span>
-                <span className="text-ivory-faint/50">AI Estimate &mdash; {m.detail}</span>
+                <span className="text-gray-400">{"\u25C7"}</span>
+                <span className="text-gray-400 min-w-[5rem]">{m.label}</span>
+                <span className="text-gray-500">AI Estimate &mdash; {m.detail}</span>
               </div>
             ))}
-            <p className="text-[10px] text-ivory-faint/40 mt-2 pt-2 border-t border-white/5">
+            <p className="text-[11px] text-gray-500 mt-2 pt-2 border-t border-white/5">
               {"\u25C7"} = AI estimate from debate text. Treat as directional, not precise.
             </p>
           </div>

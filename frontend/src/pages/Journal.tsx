@@ -3,8 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { StaggerGroup, StaggerItem } from "../components/Stagger";
 import { useDivergeAuth } from "../hooks/useAuth";
 import { useToast } from "../components/Toast";
-import { loadLocalJournalEntries } from "../utils/debateStorage";
-import { getJournal, reflectOnDebate } from "../utils/api";
+import {
+  loadImportedLocalDebateIds,
+  loadLocalJournalEntries,
+  markAutosaved,
+  markImportedLocalDebates,
+} from "../utils/debateStorage";
+import { getJournal, reflectOnDebate, saveDebate } from "../utils/api";
 import type { JournalEntry } from "../types";
 
 interface ExtendedEntry extends JournalEntry {
@@ -53,25 +58,48 @@ function mergeEntries(localEntries: ExtendedEntry[], cloudEntries: ExtendedEntry
   );
 }
 
+function toLocalEntries(): ExtendedEntry[] {
+  return loadLocalJournalEntries().map((item) => ({
+    ...item,
+    source: "local" as const,
+  }));
+}
+
+function toCloudEntries(items: Record<string, unknown>[]): ExtendedEntry[] {
+  return (items || []).map((item: Record<string, unknown>) => ({
+    id: (item.debate_id as string) || String(Math.random()),
+    pathA: (item.path_a as string) || "Option A",
+    pathB: (item.path_b as string) || "Option B",
+    summary: buildSummary(item),
+    date: (item.created_at as string) || new Date().toISOString(),
+    source: "cloud",
+    data: item as unknown as JournalEntry["data"],
+    input: (item.input as JournalEntry["input"]) || undefined,
+    chosen_path: (item.chosen_path as string) || undefined,
+    satisfaction_rating: (item.satisfaction_rating as number) || undefined,
+    reflection_note: (item.reflection_note as string) || undefined,
+  }));
+}
+
 export default function Journal() {
   const navigate = useNavigate();
-  const { token, login, isAuthenticated } = useDivergeAuth();
+  const { token, login, isAuthenticated, userId } = useDivergeAuth();
   const { toast } = useToast();
-  const [debates, setDebates] = useState<ExtendedEntry[]>([]);
+  const [localEntries, setLocalEntries] = useState<ExtendedEntry[]>([]);
+  const [cloudEntries, setCloudEntries] = useState<ExtendedEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [importingLocal, setImportingLocal] = useState(false);
   const [reflectingId, setReflectingId] = useState<string | null>(null);
   const [reflectSatisfaction, setReflectSatisfaction] = useState(5);
   const [reflectNote, setReflectNote] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    const localEntries = loadLocalJournalEntries().map((item) => ({
-      ...item,
-      source: "local" as const,
-    }));
+    const nextLocalEntries = toLocalEntries();
+    setLocalEntries(nextLocalEntries);
 
     if (!token) {
-      setDebates(localEntries);
+      setCloudEntries([]);
       setLoading(false);
       return () => {
         cancelled = true;
@@ -81,24 +109,11 @@ export default function Journal() {
     getJournal(token)
       .then((result) => {
         if (cancelled) return;
-        const cloudEntries: ExtendedEntry[] = (result.items || []).map((item: Record<string, unknown>) => ({
-          id: (item.debate_id as string) || String(Math.random()),
-          pathA: (item.path_a as string) || "Option A",
-          pathB: (item.path_b as string) || "Option B",
-          summary: buildSummary(item),
-          date: (item.created_at as string) || new Date().toISOString(),
-          source: "cloud",
-          data: item as unknown as JournalEntry["data"],
-          input: (item.input as JournalEntry["input"]) || undefined,
-          chosen_path: (item.chosen_path as string) || undefined,
-          satisfaction_rating: (item.satisfaction_rating as number) || undefined,
-          reflection_note: (item.reflection_note as string) || undefined,
-        }));
-        setDebates(mergeEntries(localEntries, cloudEntries));
+        setCloudEntries(toCloudEntries(result.items || []));
       })
       .catch((err) => {
         if (!cancelled) {
-          setDebates(localEntries);
+          setCloudEntries([]);
           toast(
             "Failed to load cloud journal: " +
               (err instanceof Error ? err.message : "Unknown error"),
@@ -118,7 +133,7 @@ export default function Journal() {
     if (!token) return;
     try {
       await reflectOnDebate(debateId, reflectSatisfaction, reflectNote, token);
-      setDebates((prev) =>
+      setCloudEntries((prev) =>
         prev.map((d) =>
           d.id === debateId
             ? { ...d, satisfaction_rating: reflectSatisfaction, reflection_note: reflectNote }
@@ -134,6 +149,85 @@ export default function Journal() {
     }
   };
 
+  const handleImportLocalDebates = async () => {
+    if (!token || !userId || importableEntries.length === 0 || importingLocal) return;
+
+    setImportingLocal(true);
+    const importedDebateIds: string[] = [];
+    let failedCount = 0;
+
+    for (const entry of importableEntries) {
+      if (!entry.data || !entry.input) {
+        failedCount += 1;
+        continue;
+      }
+
+      try {
+        await saveDebate({ debate_data: { ...entry.data, input: entry.input } }, token);
+        importedDebateIds.push(entry.id);
+        markAutosaved("cloud", entry.id);
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    if (importedDebateIds.length > 0) {
+      markImportedLocalDebates(userId, importedDebateIds);
+    }
+
+    try {
+      const refreshed = await getJournal(token);
+      setCloudEntries(toCloudEntries(refreshed.items || []));
+    } catch {
+      // The import already succeeded for some entries; keep the UI usable and let next refresh reconcile.
+    } finally {
+      setImportingLocal(false);
+    }
+
+    if (importedDebateIds.length > 0 && failedCount === 0) {
+      toast(`Imported ${importedDebateIds.length} local debate${importedDebateIds.length === 1 ? "" : "s"} to your cloud journal.`, "success");
+      return;
+    }
+
+    if (importedDebateIds.length > 0) {
+      toast(
+        `Imported ${importedDebateIds.length} local debate${importedDebateIds.length === 1 ? "" : "s"}. ${failedCount} still need${failedCount === 1 ? "s" : ""} a retry.`,
+        "info",
+      );
+      return;
+    }
+
+    toast("Couldn't import your local debates right now. Try again.", "error");
+  };
+
+  const openJournalEntry = (entry: ExtendedEntry) => {
+    if (!entry.data || !entry.input) {
+      toast("This journal entry is missing its saved debate details.");
+      return;
+    }
+
+    const route = entry.data?.verdict?.trim() ? "/verdict" : "/debate";
+    navigate(route, {
+      state: {
+        debate: entry.data,
+        input: entry.input,
+        fromJournal: true,
+      },
+    });
+  };
+
+  const debates = mergeEntries(localEntries, cloudEntries);
+  const cloudDebateIds = new Set(cloudEntries.map((entry) => entry.id));
+  const importedDebateIds = new Set(userId ? loadImportedLocalDebateIds(userId) : []);
+  const importableEntries =
+    isAuthenticated && userId
+      ? localEntries.filter(
+          (entry) =>
+            Boolean(entry.data && entry.input) &&
+            !cloudDebateIds.has(entry.id) &&
+            !importedDebateIds.has(entry.id),
+        )
+      : [];
   const isEmpty = debates.length === 0;
 
   if (loading) {
@@ -174,6 +268,31 @@ export default function Journal() {
             </StaggerItem>
           )}
 
+          {isAuthenticated && importableEntries.length > 0 && (
+            <StaggerItem className="mt-6">
+              <div className="rounded-xl border border-path-safe/30 bg-path-safe/5 px-5 py-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-path-safe text-[10px] font-mono uppercase tracking-[0.3em] mb-2">
+                    Import from this device
+                  </p>
+                  <p className="text-ivory text-sm">
+                    You have {importableEntries.length} local debate{importableEntries.length === 1 ? "" : "s"} saved on this device that are not in your cloud journal yet.
+                  </p>
+                  <p className="text-ivory-faint text-xs mt-1">
+                    Import is one-time for this signed-in account. Your local copies stay here too.
+                  </p>
+                </div>
+                <button
+                  onClick={() => void handleImportLocalDebates()}
+                  disabled={importingLocal}
+                  className="px-4 py-2 rounded-lg text-xs border border-path-safe text-path-safe cursor-pointer transition-colors duration-200 hover:bg-path-safe hover:text-void disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {importingLocal ? "Importing..." : `Import ${importableEntries.length} debate${importableEntries.length === 1 ? "" : "s"}`}
+                </button>
+              </div>
+            </StaggerItem>
+          )}
+
           {isEmpty && (
             <StaggerItem className="mt-24 text-center">
               <p className="text-ivory-dim italic text-sm max-w-xs mx-auto leading-relaxed">
@@ -195,7 +314,7 @@ export default function Journal() {
                 {debates.map((d) => (
                   <div key={d.id} className="py-4 border-b border-surface-light">
                     <button
-                      onClick={() => navigate("/debate", { state: { debate: d.data, input: d.input } })}
+                      onClick={() => openJournalEntry(d)}
                       className="w-full text-left transition-colors duration-200 cursor-pointer group"
                     >
                       <div className="flex items-center gap-2">

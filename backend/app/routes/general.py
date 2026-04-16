@@ -146,7 +146,7 @@ def save_debate_route(
     if not debate_data.get("debate_id"):
         raise HTTPException(status_code=400, detail="Missing debate_id in debate_data")
 
-    check_rate_limit(request, max_requests=20, window_seconds=3600, endpoint="save", identity=f"user:{user_id}")
+    check_rate_limit(request, max_requests=100, window_seconds=3600, endpoint="save", identity=f"user:{user_id}")
 
     try:
         user_input = _sanitize_persisted_input(debate_data.get("input", {}) or {})

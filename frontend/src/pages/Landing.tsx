@@ -43,24 +43,6 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Use-case strip */}
-      <section className="border-y border-white/5 py-4">
-        <div className="flex flex-wrap justify-center gap-x-6 gap-y-2 text-[10px] font-mono uppercase tracking-[0.2em] text-ivory-faint/50">
-          <span>Career Transitions</span>
-          <span className="text-white/10">&middot;</span>
-          <span>Education Paths</span>
-          <span className="text-white/10">&middot;</span>
-          <span>Family Decisions</span>
-          <span className="text-white/10">&middot;</span>
-          <span>Community Impact</span>
-          <span className="text-white/10">&middot;</span>
-          <span>Life Changes</span>
-        </div>
-        <p className="text-center text-[11px] text-ivory-faint/40 mt-2">
-          For individuals making hard choices. For mentors guiding them.
-        </p>
-      </section>
-
       {/* Core Value Prop */}
       <section id="engine" className="py-20 bg-void border-y border-white/5">
         <div className="max-w-7xl mx-auto px-6 text-center">
@@ -138,18 +120,16 @@ export default function Landing() {
       {/* Why Diverge? */}
       <section className="py-20 bg-void">
         <div className="max-w-2xl mx-auto px-6">
-          <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-ivory-faint/50 text-center mb-10">
-            Why not just use&hellip;
-          </p>
+          <h2 className="text-path-risk tracking-widest text-xs uppercase text-center mb-10 font-display">Why Not Just Use&hellip;</h2>
           <StaggerGroup>
             {COMPARISONS.map((c) => (
               <StaggerItem key={c.label} className="flex items-start gap-6 mb-7">
-                <div className="min-w-[7rem] border border-white/10 rounded-lg px-3 py-2.5 text-center text-[11px] font-mono uppercase text-ivory-faint/60 whitespace-pre-line leading-tight flex-shrink-0">
+                <div className="min-w-[7rem] border border-path-risk/20 rounded-lg px-3 py-2.5 text-center text-[11px] font-mono uppercase text-gray-400 whitespace-pre-line leading-tight flex-shrink-0 hover:border-path-risk/40 transition-colors">
                   {c.label}
                 </div>
-                <p className="text-ivory/60 text-sm leading-relaxed pt-1">
+                <p className="text-gray-400 text-sm leading-relaxed pt-1">
                   {c.statement}{" "}
-                  <span className="text-ivory font-medium">{c.emphasis}</span>
+                  <span className="text-path-risk font-medium">{c.emphasis}</span>
                 </p>
               </StaggerItem>
             ))}
@@ -171,7 +151,7 @@ export default function Landing() {
             {/* Round 1 */}
             <div className="bg-void p-6 border border-white/5 relative z-10 hover:border-path-risk transition-colors group">
               <span className="text-path-risk font-display text-lg mb-3 block">01</span>
-              <h4 className="font-display tracking-[0.1em] text-base mb-2 group-hover:text-path-risk transition-colors">The Fork</h4>
+              <h4 className="font-display tracking-[0.1em] text-base mb-2 group-hover:text-path-risk transition-colors">The Ripple</h4>
               <p className="text-[10px] text-gray-500 uppercase mb-3 tracking-tighter">Year 1</p>
               <p className="text-xs text-gray-400">The immediate split. Your first 12 months diverge&mdash;one path plays it safe, the other bets everything.</p>
             </div>
@@ -214,16 +194,14 @@ export default function Landing() {
       {/* Social Proof */}
       <section className="py-16 bg-void">
         <div className="max-w-xl mx-auto px-6 text-center">
-          <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-ivory-faint/50 mb-8">
-            What early testers said
-          </p>
+          <h2 className="text-path-risk tracking-widest text-xs uppercase mb-8 font-display">What Early Testers Said</h2>
           <div className="space-y-6">
             {EARLY_QUOTES.map((q) => (
               <div key={q.context}>
-                <p className="text-ivory/60 text-sm italic leading-relaxed">
+                <p className="text-gray-300 text-sm italic leading-relaxed">
                   &ldquo;{q.text}&rdquo;
                 </p>
-                <p className="text-[11px] font-mono text-ivory-faint/40 mt-1">
+                <p className="text-[11px] font-mono text-gray-500 mt-1">
                   &mdash; {q.context}
                 </p>
               </div>

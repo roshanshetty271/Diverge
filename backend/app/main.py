@@ -80,7 +80,7 @@ def create_app() -> FastAPI:
         allow_origins=settings.get_all_cors_origins() if not settings.debug else ["*"],
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", "X-Captcha-Token"],
         max_age=3600,
     )
 

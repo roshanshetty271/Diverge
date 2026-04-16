@@ -57,11 +57,16 @@ async function apiFetch<T>(url: string, options: FetchOptions = {}): Promise<T> 
   }
 }
 
-export async function startDebate(input: DecisionInput, signal?: AbortSignal): Promise<DebateResponse> {
+export async function startDebate(
+  input: DecisionInput,
+  signal?: AbortSignal,
+  captchaToken?: string | null,
+): Promise<DebateResponse> {
   return apiFetch<DebateResponse>(`${DEBATE_BASE}/api/debate/start`, {
     method: "POST",
     body: JSON.stringify(input),
     signal,
+    headers: captchaToken ? { "X-Captcha-Token": captchaToken } : {},
     _timeout: DEBATE_TIMEOUT_MS,
   });
 }
@@ -77,11 +82,13 @@ export async function getCapabilities(): Promise<Capabilities> {
 export async function startCheckpointedDebate(
   input: DecisionInput,
   signal?: AbortSignal,
+  captchaToken?: string | null,
 ): Promise<CheckpointedDebateResponse> {
   return apiFetch<CheckpointedDebateResponse>(`${CHECKPOINTED_BASE}/api/debate/session/start`, {
     method: "POST",
     body: JSON.stringify(input),
     signal,
+    headers: captchaToken ? { "X-Captcha-Token": captchaToken } : {},
     _timeout: DEBATE_TIMEOUT_MS,
   });
 }

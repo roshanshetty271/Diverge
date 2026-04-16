@@ -63,7 +63,7 @@ export interface ChronologicalTimelineExploreItem {
 }
 
 export interface ChronologicalTimeline {
-  stage_01_the_fork_year_1: ChronologicalTimelineStage;
+  stage_01_the_ripple_year_1: ChronologicalTimelineStage;
   stage_02_the_ledger_year_3: ChronologicalTimelineStage;
   stage_03_the_mirror_year_5: ChronologicalTimelineStage;
   stage_04_the_ghost_year_10: ChronologicalTimelineStage;

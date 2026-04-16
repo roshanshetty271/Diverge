@@ -33,6 +33,7 @@ from app.security.rate_limiter import check_rate_limit
 from app.security.llm_security import sanitize_writing_samples, sanitize_user_input, detect_injection
 from app.security.safety import detect_crisis, detect_blocked_topic, CRISIS_RESOURCES
 from app.security.cognito import get_current_user
+from app.security.turnstile import require_turnstile_for_anonymous_start
 from app.config import get_settings
 
 logger = logging.getLogger("diverge.routes.debate")
@@ -117,6 +118,7 @@ def start_debate(
     """
     # 0. Origin verification — enabled only when a trusted edge proxy is available
     _verify_origin(request)
+    require_turnstile_for_anonymous_start(request, user)
 
     # 0b. Content safety — runs BEFORE rate limiting so blocked requests don't count
     all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
@@ -176,6 +178,7 @@ def start_checkpointed_debate_route(
 ):
     """Start a checkpointed debate that pauses after each round."""
     _verify_origin(request)
+    require_turnstile_for_anonymous_start(request, user)
 
     all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
     is_crisis, crisis_cat = detect_crisis(all_text)
@@ -284,6 +287,7 @@ async def stream_debate(
 ):
     """Stream debate rounds via SSE as each round completes."""
     _verify_origin(request)
+    require_turnstile_for_anonymous_start(request, user)
 
     # Content safety — before rate limiting
     all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
@@ -379,6 +383,7 @@ async def stream_debate_tokens(
     real-time typewriter effect in the UI.
     """
     _verify_origin(request)
+    require_turnstile_for_anonymous_start(request, user)
 
     all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
     is_crisis, crisis_cat = detect_crisis(all_text)

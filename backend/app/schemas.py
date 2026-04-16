@@ -138,7 +138,7 @@ class TimelineExploreItem(BaseModel):
 
 class StructuredTimeline(BaseModel):
     """Strict six-stage timeline contract used by the frontend timeline views."""
-    stage_01_the_fork_year_1: TimelineStage
+    stage_01_the_ripple_year_1: TimelineStage
     stage_02_the_ledger_year_3: TimelineStage
     stage_03_the_mirror_year_5: TimelineStage
     stage_04_the_ghost_year_10: TimelineStage

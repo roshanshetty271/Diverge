@@ -36,8 +36,8 @@ function cleanSlop(text: string): string {
 
 export default function AgentMessage({ agentName, message, variant = "safe", voiceId, streaming, ttsEnabled = true }: Props) {
   const isSafe = variant === "safe";
-  const borderColor = isSafe ? "border-l-path-safe" : "border-r-path-risk";
   const accentText = isSafe ? "text-path-safe" : "text-path-risk";
+  const borderClass = isSafe ? "border-l-2 border-r-0 border-l-path-safe" : "border-l-0 border-r-2 border-r-path-risk";
   const [speaking, setSpeaking] = useState(false);
   const cleaned = cleanSlop(message);
 
@@ -105,8 +105,8 @@ export default function AgentMessage({ agentName, message, variant = "safe", voi
           <AgentAvatar variant={variant} speaking={speaking || showCursor} />
         </div>
 
-        <div>
-          <div className={`flex items-center gap-2 mb-1.5 ${isSafe ? "" : "justify-end"}`}>
+        <div className="space-y-2.5">
+          <div className={`flex items-center gap-2 mb-1 ${isSafe ? "" : "justify-end"}`}>
             <span className={`${accentText} text-xs font-medium font-body`}>{agentName}</span>
             {ttsEnabled && voiceId && !streaming && (
               <button
@@ -125,22 +125,30 @@ export default function AgentMessage({ agentName, message, variant = "safe", voi
             )}
           </div>
 
-          <div className={`bg-surface rounded-lg p-4 border-l-2 border-r-0 ${isSafe ? borderColor : "border-l-0 border-r-2 border-r-path-risk"}`}>
-            <div className="text-ivory text-sm leading-[1.75] space-y-3">
-              {paragraphs.length > 0 ? (
-                paragraphs.map((paragraph, i) => (
-                  <p key={i}>
-                    {paragraph}
-                    {showCursor && i === paragraphs.length - 1 && (
-                      <span className="inline-block w-[2px] h-[1em] bg-current ml-0.5 align-text-bottom animate-pulse" />
-                    )}
-                  </p>
-                ))
-              ) : showCursor ? (
-                <p><span className="inline-block w-[2px] h-[1em] bg-current align-text-bottom animate-pulse" /></p>
-              ) : null}
+          {paragraphs.length > 0 ? (
+            paragraphs.map((paragraph, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.35, delay: streaming ? 0 : i * 0.12, ease: "easeOut" }}
+                className={`bg-surface rounded-lg px-4 py-3 ${borderClass}`}
+              >
+                <p className="text-ivory text-sm leading-[1.75]">
+                  {paragraph}
+                  {showCursor && i === paragraphs.length - 1 && (
+                    <span className="inline-block w-[2px] h-[1em] bg-current ml-0.5 align-text-bottom animate-pulse" />
+                  )}
+                </p>
+              </motion.div>
+            ))
+          ) : showCursor ? (
+            <div className={`bg-surface rounded-lg px-4 py-3 ${borderClass}`}>
+              <p className="text-ivory text-sm leading-[1.75]">
+                <span className="inline-block w-[2px] h-[1em] bg-current align-text-bottom animate-pulse" />
+              </p>
             </div>
-          </div>
+          ) : null}
         </div>
       </div>
     </motion.div>

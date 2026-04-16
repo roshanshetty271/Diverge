@@ -4,12 +4,22 @@ const DEBATE_KEY = "diverge_debate";
 const INPUT_KEY = "diverge_input";
 const LOCAL_JOURNAL_KEY = "diverge_local_journal";
 const AUTOSAVE_PREFIX = "diverge_autosave";
+const GUT_CHECK_PREFIX = "diverge_gut_check";
+const LOCAL_IMPORT_LEDGER_KEY = "diverge_local_import_ledger";
 
 interface StoredDebate {
   debate: DebateResponse;
   input: DecisionInput;
   timestamp: number;
 }
+
+export interface StoredGutCheckState {
+  leaning: string | null;
+  fear: string;
+  submitted: boolean;
+}
+
+type LocalImportLedger = Record<string, string[]>;
 
 const MAX_AGE_MS = 2 * 60 * 60 * 1000;
 const LOCAL_JOURNAL_LIMIT = 50;
@@ -51,6 +61,29 @@ function writeLocalJournal(entries: JournalEntry[]): void {
 
 function autosaveKey(target: "cloud" | "local", debateId: string): string {
   return `${AUTOSAVE_PREFIX}:${target}:${debateId}`;
+}
+
+function gutCheckKey(debateId: string): string {
+  return `${GUT_CHECK_PREFIX}:${debateId}`;
+}
+
+function readLocalImportLedger(): LocalImportLedger {
+  try {
+    const raw = localStorage.getItem(LOCAL_IMPORT_LEDGER_KEY);
+    if (!raw) return {};
+    const data = JSON.parse(raw);
+    return data && typeof data === "object" ? (data as LocalImportLedger) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLocalImportLedger(ledger: LocalImportLedger): void {
+  try {
+    localStorage.setItem(LOCAL_IMPORT_LEDGER_KEY, JSON.stringify(ledger));
+  } catch {
+    // localStorage unavailable
+  }
 }
 
 export function storeDebateState(debate: DebateResponse, input: DecisionInput): void {
@@ -98,6 +131,25 @@ export function loadLocalJournalEntries(): JournalEntry[] {
   return readLocalJournal();
 }
 
+export function loadImportedLocalDebateIds(userId: string): string[] {
+  const ledger = readLocalImportLedger();
+  const debateIds = ledger[userId];
+  return Array.isArray(debateIds) ? debateIds : [];
+}
+
+export function markImportedLocalDebates(userId: string, debateIds: string[]): void {
+  if (!userId || debateIds.length === 0) return;
+
+  const ledger = readLocalImportLedger();
+  const existing = new Set(loadImportedLocalDebateIds(userId));
+  for (const debateId of debateIds) {
+    if (debateId) existing.add(debateId);
+  }
+
+  ledger[userId] = Array.from(existing);
+  writeLocalImportLedger(ledger);
+}
+
 export function removeLocalJournalEntry(debateId: string): void {
   const existing = readLocalJournal();
   writeLocalJournal(existing.filter((item) => item.id !== debateId));
@@ -114,6 +166,30 @@ export function hasAutosaved(target: "cloud" | "local", debateId: string): boole
 export function markAutosaved(target: "cloud" | "local", debateId: string): void {
   try {
     localStorage.setItem(autosaveKey(target, debateId), "1");
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+export function loadGutCheckState(debateId: string): StoredGutCheckState | null {
+  try {
+    const raw = localStorage.getItem(gutCheckKey(debateId));
+    if (!raw) return null;
+
+    const data = JSON.parse(raw) as Partial<StoredGutCheckState>;
+    return {
+      leaning: typeof data.leaning === "string" ? data.leaning : null,
+      fear: typeof data.fear === "string" ? data.fear : "",
+      submitted: data.submitted === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveGutCheckState(debateId: string, state: StoredGutCheckState): void {
+  try {
+    localStorage.setItem(gutCheckKey(debateId), JSON.stringify(state));
   } catch {
     // localStorage unavailable
   }

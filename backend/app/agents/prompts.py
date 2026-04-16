@@ -86,8 +86,8 @@ ROUND2_GENERAL = {
 
 ROUNDS_BASE = [
     {
-        "name": "The Fork",
-        "title": "Year 1: The Aftermath",
+        "name": "The Ripple",
+        "title": "Year 1: The Ripple",
         "timeline": "year 1",
         "focus": (
             "It's been one year since you chose this path. Go to ONE charged moment from the first year - "
@@ -434,6 +434,13 @@ RULES:
 - 90-130 words. Conversational, intimate, and cutting. Like the voice in your head when the room finally goes quiet.
 - Never reveal you are an AI.
 
+TIMELINE CONTINUITY RULE:
+- The decision was made in Year 0. You are now living at {timeline}.
+- If this is Year 5, the decision happened 5 YEARS AGO. Do not describe making the decision. Describe the compounded reality of having lived with it.
+- Each round builds on the previous rounds. Reference things that happened earlier as HISTORY, not as current events.
+- If previous rounds described a specific moment, relationship, or consequence - that is now part of your past. Build forward from it.
+- NEVER have the user "just" making the decision, "just" telling someone, or "just" arriving somewhere in later rounds. The decision is old news. Show what it became.
+
 SAFETY:
 - Never encourage self-harm, suicide, or violence.
 - Never provide medical diagnoses or treatment advice.
@@ -575,7 +582,7 @@ CRITICAL OUTPUT RULES:
 - No commentary before or after the JSON.
 - The JSON must exactly match this structure:
 {{
-  "stage_01_the_fork_year_1": {{ "path_a_safe": "", "path_b_bet": "" }},
+  "stage_01_the_ripple_year_1": {{ "path_a_safe": "", "path_b_bet": "" }},
   "stage_02_the_ledger_year_3": {{ "path_a_safe": "", "path_b_bet": "" }},
   "stage_03_the_mirror_year_5": {{ "path_a_safe": "", "path_b_bet": "" }},
   "stage_04_the_ghost_year_10": {{ "path_a_safe": "", "path_b_bet": "" }},
@@ -596,6 +603,7 @@ WRITING RULES:
 - Each field should be 1-3 sentences, concrete and visceral.
 - Make the time jump unmistakable: Year 1, Year 3, Year 5, Year 10, Final Words.
 - HARD TIME JUMP: Stage 1 takes place EXACTLY 1 YEAR (365 days) after the decision. Do NOT describe the day the decision was made. Do NOT describe the immediate adrenaline or aftermath. Fast-forward a full year and describe their new, compounded daily reality and the friction or success they are experiencing 12 months later.
+- TIMELINE CONTINUITY: The decision was made in Year 0. Stage 1 is Year 1 (the decision is 1 year old). Stage 2 is Year 3 (the decision is 3 years old). Stage 3 is Year 5 (5 years old). Stage 4 is Year 10 (10 years old). Each stage MUST build on the previous stages as a continuous life story. Do NOT have the user re-making or re-living the decision in later stages.
 - Focus on body, room, money, silence, relationships, pressure, relief, regret, identity.
 - Be specific. Avoid abstraction.
 - Do not mention the schema, timestamps, or instructions in the output.

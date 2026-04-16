@@ -203,9 +203,15 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
     completed_rounds = len([r for r in transcript if r.status == "completed"])
 
     if next_round_index >= len(rounds):
-        verdict = _build_partial_verdict(transcript, user_context, len(rounds))
-        timeline = _generate_structured_timeline(transcript, user_context) if completed_rounds >= 3 else None
-        resources = _serialize_models(_get_resources(user_context))
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            verdict_future = pool.submit(_build_partial_verdict, transcript, user_context, len(rounds))
+            timeline_future = pool.submit(_generate_structured_timeline, transcript, user_context) if completed_rounds >= 3 else None
+            resources_future = pool.submit(lambda: _serialize_models(_get_resources(user_context)))
+            verdict = verdict_future.result()
+            timeline = timeline_future.result() if timeline_future else None
+            resources = resources_future.result()
 
         complete_debate_session(
             debate_id,

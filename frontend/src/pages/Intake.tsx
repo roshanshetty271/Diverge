@@ -4,8 +4,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import ValuesChips from "../components/ValuesChips";
 import WritingSampleInput from "../components/WritingSampleInput";
 import { useToast } from "../components/Toast";
+import { useDivergeAuth } from "../hooks/useAuth";
 import { sanitizeInput, sanitizeFinancialInput, validateDecisionInput } from "../utils/security";
 import { TEMPLATES } from "../utils/constants";
+import { getTurnstileToken } from "../utils/turnstile";
 import VoiceButton from "../components/VoiceButton";
 import type { DecisionInput } from "../types";
 
@@ -31,6 +33,7 @@ export default function Intake() {
   const initial = (location.state || {}) as { pathA?: string; pathB?: string; templateId?: string };
 
   const { toast } = useToast();
+  const { isAuthenticated } = useDivergeAuth();
   const [step, setStep] = useState(0);
   const [userName, setUserName] = useState("");
   const [userAge, setUserAge] = useState("");
@@ -42,6 +45,7 @@ export default function Intake() {
   const [context, setContext] = useState("");
   const [values, setValues] = useState<string[]>([]);
   const [writingSample, setWritingSample] = useState("");
+  const [startingDebate, setStartingDebate] = useState(false);
 
   const showMoney = isFinancialDecision(pathA, pathB, initial.templateId);
 
@@ -53,7 +57,7 @@ export default function Intake() {
     return showMoney ? 4 : 3;
   };
 
-  const startDebate = () => {
+  const startDebate = async () => {
     const { valid, errors } = validateDecisionInput(pathA, pathB);
     if (!valid) { errors.forEach((e) => toast(e)); return; }
 
@@ -69,7 +73,18 @@ export default function Intake() {
       constraints: sanitizeInput(context) || null,
       writing_samples: sanitizeInput(writingSample) || null,
     };
-    navigate("/loading", { state: payload });
+
+    setStartingDebate(true);
+    try {
+      const captchaToken = !isAuthenticated ? await getTurnstileToken("debate_start") : null;
+      navigate("/loading", {
+        state: { input: payload, captchaToken },
+      });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Please verify you're human and try again.");
+    } finally {
+      setStartingDebate(false);
+    }
   };
 
   const canProceed = pathA.trim() && pathB.trim();
@@ -121,6 +136,7 @@ export default function Intake() {
 
           {step === 1 && (
             <motion.div key="step1" variants={slideVariants} initial="enter" animate="center" exit="exit" transition={{ duration: 0.6 }}>
+              <button onClick={() => setStep(0)} className="text-gray-500 text-xs font-mono hover:text-gray-300 transition-colors cursor-pointer mb-4">&larr; Back</button>
               <h1 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>
                 {userName.trim() ? `${userName.trim()}, you're deciding between:` : "You\u2019re deciding between:"}
               </h1>
@@ -141,13 +157,16 @@ export default function Intake() {
               <p className="text-ivory-faint text-xs italic mt-1">Everything is optional.</p>
               <div className="flex gap-3 mt-8">
                 <button onClick={handleAddContext} disabled={!canProceed} className="flex-1 py-3 px-6 rounded-lg text-sm bg-path-risk text-void font-medium disabled:opacity-30 disabled:cursor-not-allowed transition-opacity duration-200 cursor-pointer">Add context &rarr;</button>
-                <button onClick={startDebate} disabled={!canProceed} className="flex-1 py-3 px-6 rounded-lg text-sm bg-transparent border border-surface-light text-ivory-dim disabled:opacity-30 disabled:cursor-not-allowed hover:border-path-safe transition-colors duration-200 cursor-pointer">Skip &mdash; just debate</button>
+                <button onClick={() => void startDebate()} disabled={!canProceed || startingDebate} className="flex-1 py-3 px-6 rounded-lg text-sm bg-transparent border border-surface-light text-ivory-dim disabled:opacity-30 disabled:cursor-not-allowed hover:border-path-safe transition-colors duration-200 cursor-pointer">
+                  {startingDebate ? "Verifying..." : "Skip &mdash; just debate"}
+                </button>
               </div>
             </motion.div>
           )}
 
           {step === 2 && (
             <motion.div key="step2" variants={slideVariants} initial="enter" animate="center" exit="exit" transition={{ duration: 0.6 }}>
+              <button onClick={() => setStep(1)} className="text-gray-500 text-xs font-mono hover:text-gray-300 transition-colors cursor-pointer mb-4">&larr; Back</button>
               <h2 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>The money stuff</h2>
               <p className="text-ivory-dim text-sm mt-1">Helps the debate be specific about finances.</p>
               <div className="mt-8 space-y-5">
@@ -171,6 +190,7 @@ export default function Intake() {
 
           {step === 3 && (
             <motion.div key="step3" variants={slideVariants} initial="enter" animate="center" exit="exit" transition={{ duration: 0.6 }}>
+              <button onClick={() => setStep(showMoney ? 2 : 1)} className="text-gray-500 text-xs font-mono hover:text-gray-300 transition-colors cursor-pointer mb-4">&larr; Back</button>
               <h2 className="font-display text-xl text-ivory" style={{ fontWeight: 400 }}>What&rsquo;s the situation?</h2>
               <p className="text-ivory-dim text-sm mt-1">Why is this decision hard? Any background that would help.</p>
               <textarea
@@ -196,8 +216,8 @@ export default function Intake() {
                 Diverge is a decision exploration tool, not therapy or medical advice.<br />
                 If you&rsquo;re in crisis, call <a href="tel:988" className="underline underline-offset-2">988</a> or text HOME to 741741.
               </p>
-              <button onClick={startDebate} className="w-full mt-4 py-4 rounded-lg text-base bg-path-risk text-void font-medium tracking-wide cursor-pointer transition-colors duration-200 hover:shadow-[0_0_24px_rgba(212,168,67,0.15)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-path-risk">
-                Start the debate &rarr;
+              <button onClick={() => void startDebate()} disabled={startingDebate} className="w-full mt-4 py-4 rounded-lg text-base bg-path-risk text-void font-medium tracking-wide cursor-pointer transition-colors duration-200 hover:shadow-[0_0_24px_rgba(212,168,67,0.15)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-path-risk disabled:opacity-60 disabled:cursor-not-allowed">
+                {startingDebate ? "Verifying..." : "Start the debate \u2192"}
               </button>
             </motion.div>
           )}

@@ -45,7 +45,7 @@ export const TEMPLATES: TemplateOption[] = [
 ];
 
 export const ROUNDS: RoundInfo[] = [
-  { name: "The Fork", title: "Year 1: The Aftermath", description: "What happened in the first year after you chose." },
+  { name: "The Ripple", title: "Year 1: The Ripple", description: "What happened in the first year after you chose." },
   { name: "The Ledger", title: "Year 2-3: The Ledger", description: "The honeymoon is over. What does this path actually cost?" },
   { name: "The Mirror", title: "Year 5: The Mirror", description: "Five years in. Who have you become on this path?" },
   { name: "The Ghost", title: "Year 10: The Ghost", description: "A full decade later. What still haunts or anchors you?" },

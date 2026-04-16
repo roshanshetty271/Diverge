@@ -17,8 +17,10 @@ import { generateDebatePdf } from "../utils/exportPdf";
 import {
   hasAutosaved,
   loadDebateState,
+  loadGutCheckState,
   markAutosaved,
   removeLocalJournalEntry,
+  saveGutCheckState,
   saveLocalJournalEntry,
 } from "../utils/debateStorage";
 import type { Capabilities, ChronologicalTimeline, DebateResponse, DecisionInput, Resource } from "../types";
@@ -135,7 +137,7 @@ function mapStructuredTimelineRows(
   if (!timeline) return [];
 
   const rows = [
-    { label: "Year 1", text: timeline.stage_01_the_fork_year_1[pathKey] },
+    { label: "Year 1", text: timeline.stage_01_the_ripple_year_1[pathKey] },
     { label: "Year 3", text: timeline.stage_02_the_ledger_year_3[pathKey] },
     { label: "Year 5", text: timeline.stage_03_the_mirror_year_5[pathKey] },
     { label: "Year 10", text: timeline.stage_04_the_ghost_year_10[pathKey] },
@@ -178,10 +180,16 @@ function extractNamedSections(verdictText: string, headerRegex: RegExp): { headi
 export default function Verdict() {
   const location = useLocation();
   const navigate = useNavigate();
-  const locationState = (location.state || {}) as { debate?: DebateResponse; input?: DecisionInput };
+  const locationState = (location.state || {}) as {
+    debate?: DebateResponse;
+    input?: DecisionInput;
+    fromJournal?: boolean;
+  };
   const stored = !locationState.debate ? loadDebateState() : null;
   const debate = locationState.debate || stored?.debate;
   const input = locationState.input || stored?.input;
+  const initialGutCheck = debate?.debate_id ? loadGutCheckState(debate.debate_id) : null;
+  const shouldSkipGutCheck = Boolean(locationState.fromJournal && debate?.verdict);
   const { isAuthenticated, isLoading: authLoading, token, login } = useDivergeAuth();
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
@@ -199,10 +207,9 @@ export default function Verdict() {
   const [chosenPath, setChosenPath] = useState<string | null>(null);
   const [choosingPath, setChoosingPath] = useState(false);
   const [blindSpotRevealed, setBlindSpotRevealed] = useState(false);
-  const [fullVerdictOpen, setFullVerdictOpen] = useState(false);
-  const [gutLeaning, setGutLeaning] = useState<string | null>(null);
-  const [gutFear, setGutFear] = useState("");
-  const [gutSubmitted, setGutSubmitted] = useState(false);
+  const [gutLeaning, setGutLeaning] = useState<string | null>(initialGutCheck?.leaning ?? null);
+  const [gutFear, setGutFear] = useState(initialGutCheck?.fear ?? "");
+  const [gutSubmitted, setGutSubmitted] = useState(initialGutCheck?.submitted ?? shouldSkipGutCheck);
 
   useEffect(() => {
     if (!debate || !input || authLoading) return;
@@ -272,6 +279,25 @@ export default function Verdict() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!debate?.debate_id) return;
+
+    const saved = loadGutCheckState(debate.debate_id);
+    setGutLeaning(saved?.leaning ?? null);
+    setGutFear(saved?.fear ?? "");
+    setGutSubmitted(saved?.submitted ?? shouldSkipGutCheck);
+  }, [debate?.debate_id, shouldSkipGutCheck]);
+
+  useEffect(() => {
+    if (!debate?.debate_id) return;
+
+    saveGutCheckState(debate.debate_id, {
+      leaning: gutLeaning,
+      fear: gutFear,
+      submitted: gutSubmitted,
+    });
+  }, [debate?.debate_id, gutFear, gutLeaning, gutSubmitted]);
 
   if (!debate) {
     return (
@@ -469,7 +495,7 @@ export default function Verdict() {
     return (
       <div className="min-h-screen bg-void px-6 py-16 flex items-center justify-center">
         <div className="max-w-lg w-full border border-white/10 bg-surface/30 rounded-xl p-8">
-          <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-ivory-faint text-center mb-6">
+          <p className="text-path-risk text-[10px] font-mono uppercase tracking-[0.3em] text-center mb-6">
             Before the verdict
           </p>
           <h2 className="font-display text-lg text-ivory text-center mb-8">
@@ -481,7 +507,7 @@ export default function Verdict() {
               className={`px-5 py-3 rounded-lg border text-sm font-mono transition-all ${
                 gutLeaning === pathAName
                   ? "border-path-safe text-path-safe shadow-[0_0_12px_rgba(74,111,165,0.2)]"
-                  : "border-white/10 text-ivory-faint hover:border-path-safe/50"
+                  : "border-white/10 text-gray-400 hover:border-path-safe/50"
               }`}
             >
               {pathAName}
@@ -491,27 +517,27 @@ export default function Verdict() {
               className={`px-5 py-3 rounded-lg border text-sm font-mono transition-all ${
                 gutLeaning === pathBName
                   ? "border-path-risk text-path-risk shadow-[0_0_12px_rgba(212,168,67,0.2)]"
-                  : "border-white/10 text-ivory-faint hover:border-path-risk/50"
+                  : "border-white/10 text-gray-400 hover:border-path-risk/50"
               }`}
             >
               {pathBName}
             </button>
           </div>
           <div className="mb-8">
-            <label className="block text-ivory/70 text-sm mb-2">
+            <label className="block text-ivory-dim text-sm mb-2">
               What&apos;s the one thing you&apos;re most afraid of?{" "}
-              <span className="text-ivory-faint/40 text-[11px]">(optional)</span>
+              <span className="text-gray-500 text-xs">(optional)</span>
             </label>
             <textarea
               value={gutFear}
               onChange={(e) => setGutFear(e.target.value.slice(0, 200))}
               placeholder="The thing you keep coming back to..."
-              className="w-full bg-transparent border-b border-white/10 text-ivory text-sm py-2 resize-none focus:outline-none focus:border-ivory-faint/40 placeholder:text-ivory-faint/30"
+              className="w-full bg-transparent border-b border-white/10 text-ivory text-sm py-2 resize-none focus:outline-none focus:border-gray-500 placeholder:text-gray-600"
               rows={2}
             />
             <div className="flex justify-between mt-1">
-              <p className="text-[10px] text-ivory-faint/30">This stays on your device. It&apos;s never sent anywhere.</p>
-              <p className="text-[10px] font-mono text-ivory-faint/30">{gutFear.length} / 200</p>
+              <p className="text-xs text-gray-500">This stays on your device. It&apos;s never sent anywhere.</p>
+              <p className="text-xs font-mono text-gray-500">{gutFear.length} / 200</p>
             </div>
           </div>
           <button
@@ -521,7 +547,7 @@ export default function Verdict() {
           >
             Show me the verdict
           </button>
-          <p className="text-[11px] text-ivory-faint/50 text-center mt-4 leading-relaxed">
+          <p className="text-xs text-gray-500 text-center mt-4 leading-relaxed">
             This helps you notice if the AI confirmed what you already believed<br />
             vs. genuinely shifted your thinking.
           </p>
@@ -537,8 +563,8 @@ export default function Verdict() {
           {/* Gut-check reminder */}
           {gutLeaning && (
             <StaggerItem className="text-center mb-4">
-              <p className="text-[11px] font-mono text-ivory-faint/50">
-                You came in leaning toward <span className="text-ivory-faint">{gutLeaning}</span>
+              <p className="text-xs font-mono text-gray-500">
+                You came in leaning toward <span className="text-ivory">{gutLeaning}</span>
               </p>
             </StaggerItem>
           )}
@@ -633,9 +659,16 @@ export default function Verdict() {
                     </button>
                   </>
                 ) : (
-                  <p className="text-ivory text-sm md:text-base leading-relaxed">
-                    {blindSpot || stripMarkdown(verdictText) || "The verdict is being prepared…"}
-                  </p>
+                  <>
+                    {gutFear && (
+                      <p className="text-gray-400 text-sm italic mb-4 border-l-2 border-path-risk/30 pl-3">
+                        You said you were afraid of: &ldquo;{gutFear}&rdquo;
+                      </p>
+                    )}
+                    <p className="text-ivory text-sm md:text-base leading-relaxed">
+                      {blindSpot || stripMarkdown(verdictText) || "The verdict is being prepared\u2026"}
+                    </p>
+                  </>
                 )}
               </div>
             </div>
@@ -796,34 +829,6 @@ export default function Verdict() {
             </StaggerItem>
           )}
 
-          {(verdictText || timelineVerdict) && (
-            <StaggerItem className="mt-10">
-              <div className="bg-surface rounded-lg border border-surface-light p-5">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-ivory-faint text-[10px] font-mono uppercase tracking-[0.25em] mb-1">
-                      Full Verdict
-                    </p>
-                    <p className="text-ivory-dim text-sm italic">
-                      Raw structured text from the verdict model
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setFullVerdictOpen((open) => !open)}
-                    className="px-4 py-2 rounded-lg text-xs font-medium border border-surface-light text-ivory-dim hover:border-ivory-dim hover:text-ivory transition-colors duration-200"
-                  >
-                    {fullVerdictOpen ? "Hide" : "Show"}
-                  </button>
-                </div>
-                {fullVerdictOpen && (
-                  <div className="mt-4 text-ivory text-base leading-[1.75] whitespace-pre-line">
-                    {stripMarkdown(verdictText || timelineVerdict)}
-                  </div>
-                )}
-              </div>
-            </StaggerItem>
-          )}
-
           <StaggerItem className="mt-12 flex flex-wrap gap-3 justify-center">
             {saveSource === "cloud" && (
               <p className="text-path-safe text-sm font-mono">&#x2713; Saved to your journal</p>
@@ -911,19 +916,19 @@ export default function Verdict() {
           {/* Ethical stance */}
           <StaggerItem className="mt-16 border-t border-white/5 pt-8">
             <div className="max-w-lg mx-auto text-center">
-              <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-ivory-faint mb-4">
+              <p className="text-path-risk text-[10px] font-mono uppercase tracking-[0.3em] mb-4">
                 &mdash;&mdash; About this analysis &mdash;&mdash;
               </p>
-              <p className="text-[12px] text-ivory-faint/70 leading-relaxed mb-4">
+              <p className="text-sm text-gray-400 leading-relaxed mb-4">
                 Diverge is a thinking tool, not an oracle. It does not pick a side.
               </p>
-              <ul className="text-[12px] text-ivory-faint/60 leading-relaxed text-left max-w-sm mx-auto space-y-1 mb-4">
+              <ul className="text-sm text-gray-500 leading-relaxed text-left max-w-sm mx-auto space-y-1 mb-4">
                 <li>&bull; All metrics are AI estimates extracted from debate arguments</li>
                 <li>&bull; Quantitative tools inform the debate, not the scores</li>
                 <li>&bull; Your lived experience matters more than any model output</li>
                 <li>&bull; This is not therapy, medical, or legal advice</li>
               </ul>
-              <p className="text-[11px] text-ivory-faint/50">
+              <p className="text-xs text-gray-400">
                 In crisis?{" "}
                 <a href="tel:988" className="text-path-risk hover:underline">Call 988</a>
                 {" "}or text HOME to{" "}

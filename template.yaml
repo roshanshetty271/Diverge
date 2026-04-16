@@ -19,6 +19,7 @@ Globals:
         DIVERGE_COMPREHEND_ENABLED: !Ref EnableComprehend
         DIVERGE_DEBUG: "false"
         DIVERGE_PUBLIC_APP_URL: !Ref PublicAppUrl
+        DIVERGE_TURNSTILE_SECRET_KEY: !Ref TurnstileSecretKey
 
 Parameters:
   Stage:
@@ -26,6 +27,10 @@ Parameters:
     Default: prod
     AllowedValues: [dev, prod]
   OpenAIApiKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+  TurnstileSecretKey:
     Type: String
     Default: ""
     NoEcho: true
@@ -412,7 +417,7 @@ Resources:
       Cors:
         AllowOrigin: "'*'"
         AllowMethods: "'GET,POST,OPTIONS'"
-        AllowHeaders: "'Authorization,Content-Type'"
+        AllowHeaders: "'Authorization,Content-Type,X-Captcha-Token'"
       Auth:
         Authorizers:
           CognitoAuth:

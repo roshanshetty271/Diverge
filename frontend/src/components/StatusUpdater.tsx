@@ -8,7 +8,7 @@ interface StatusUpdaterProps {
 }
 
 const STATUS_MESSAGES: Record<number, string> = {
-  0: "Simulating Year 1: The Fork...",
+  0: "Simulating Year 1: The Ripple...",
   1: "Alpha is building a financial case...",
   2: "Beta is exploring growth potential...",
   3: "Calculating social impact ripple...",

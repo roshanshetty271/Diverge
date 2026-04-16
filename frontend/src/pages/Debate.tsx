@@ -44,6 +44,8 @@ export default function Debate() {
   const [interjectionSent, setInterjectionSent] = useState<Record<number, boolean>>({});
   const [continuingCheckpointed, setContinuingCheckpointed] = useState(false);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  const [roundTransition, setRoundTransition] = useState(false);
+  const [transitionLabel, setTransitionLabel] = useState({ name: "", title: "" });
 
   const transcript: RoundResult[] = isStreaming ? stream.rounds : (locationState.debate?.transcript || stored?.debate?.transcript || []);
   const input: DecisionInput | undefined | null = isStreaming ? stream.input : (locationState.input || stored?.input);
@@ -94,6 +96,18 @@ export default function Debate() {
     setVisibleMessages(2);
     setSkipped(true);
   }, []);
+
+  const goToRound = useCallback((round: number) => {
+    if (round === currentRound) return;
+    const name = ROUNDS[round - 1]?.name || `Round ${round}`;
+    const title = ROUNDS[round - 1]?.title || "";
+    setTransitionLabel({ name, title });
+    setRoundTransition(true);
+    setTimeout(() => {
+      setCurrentRound(round);
+      setRoundTransition(false);
+    }, 1000);
+  }, [currentRound]);
 
   // For non-streaming mode, reveal messages with a delay
   useEffect(() => {
@@ -194,7 +208,7 @@ export default function Debate() {
   const nextRoundAvailable = safeRound < transcript.length || (isStreaming && stream.streamingRound > safeRound);
   // Is the next round still being generated (not yet started)?
   const nextRoundGenerating = isStreaming && !stream.done && safeRound >= transcript.length && stream.streamingRound <= safeRound && !isCurrentRoundStreaming;
-  const canGoVerdict = safeRound >= transcript.length && verdictReady;
+  const canGoVerdict = safeRound >= transcript.length && verdictReady && !!debate?.verdict;
   const canContinueCheckpointed =
     isCheckpointedMode &&
     safeRound === transcript.length &&
@@ -255,7 +269,7 @@ export default function Debate() {
               <div key={i} className="flex items-center gap-1">
                 {i > 0 && <span className={`w-4 md:w-6 h-px ${isCompleted || isActive ? "bg-path-risk" : "bg-surface-light"}`} />}
                 <button
-                  onClick={() => isReachable && setCurrentRound(stepNum)}
+                  onClick={() => isReachable && goToRound(stepNum)}
                   className={`text-[10px] md:text-xs font-mono transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk rounded ${
                     isActive
                       ? "text-path-risk font-medium cursor-pointer"
@@ -280,6 +294,41 @@ export default function Debate() {
           <p className="text-ivory-dim text-sm mt-1">{roundTitle}</p>
           {round?.status === "partial" && <p className="text-path-risk text-xs mt-2 font-mono">This round was only partially generated</p>}
         </div>
+
+        {/* Round transition interstitial */}
+        <AnimatePresence>
+          {roundTransition && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+              className="fixed inset-0 z-50 bg-void flex items-center justify-center"
+            >
+              <div className="text-center">
+                <motion.h2
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.15, duration: 0.4 }}
+                  className="font-display text-3xl md:text-4xl text-ivory"
+                  style={{ fontWeight: 400 }}
+                >
+                  {transitionLabel.name}
+                </motion.h2>
+                {transitionLabel.title && (
+                  <motion.p
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.4, duration: 0.4 }}
+                    className="text-ivory-faint text-sm mt-2"
+                  >
+                    {transitionLabel.title}
+                  </motion.p>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Chat bubbles */}
         <AnimatePresence mode="wait">
@@ -366,25 +415,30 @@ export default function Debate() {
                   Interject
                 </button>
               </div>
-              <p className="text-ivory-faint/40 text-[10px] text-center mt-1.5">Optional — redirect the next round</p>
+              <p className="text-gray-500 text-xs text-center mt-2">Optional &mdash; redirect the next round</p>
             </div>
           </div>
         )}
 
-        {/* Show submitted interjection */}
+        {/* Show submitted interjection as a conversation bubble */}
         {interjectionSent[safeRound] && stream.interjections[safeRound] && (
-          <div className="mt-4 flex justify-center">
-            <div className="bg-surface/50 border border-surface-light rounded-lg px-4 py-2.5 max-w-md">
-              <p className="text-ivory-faint text-xs font-mono mb-1">You interjected:</p>
-              <p className="text-ivory text-sm italic">&ldquo;{stream.interjections[safeRound]}&rdquo;</p>
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+            className="mt-5 flex justify-center"
+          >
+            <div className="bg-white/5 border border-white/10 rounded-lg px-5 py-3 max-w-md">
+              <p className="text-ivory/80 text-sm italic leading-relaxed">&ldquo;{stream.interjections[safeRound]}&rdquo;</p>
+              <p className="text-ivory-faint/40 text-[10px] font-mono text-right mt-1">&mdash; You</p>
             </div>
-          </div>
+          </motion.div>
         )}
 
         {isCheckpointedMode && safeRound === transcript.length && visibleMessages >= 2 && (
-          <div className="mt-6">
-            <div className="max-w-md mx-auto">
-              <p className="text-ivory-faint text-xs text-center mb-2">
+          <div className="mt-8">
+            <div className="max-w-2xl mx-auto">
+              <p className="text-gray-400 text-sm text-center mb-3">
                 Pause here if you want to add context before the next round.
               </p>
               <div className="flex gap-2">
@@ -399,20 +453,20 @@ export default function Debate() {
                       void handleCheckpointedContinue();
                     }
                   }}
-                  className="flex-1 bg-surface border border-surface-light rounded-lg px-4 py-2.5 text-ivory text-sm focus:border-ivory-dim focus:outline-none placeholder:text-ivory-faint transition-colors duration-200"
+                  className="flex-1 bg-surface border border-surface-light rounded-lg px-4 py-3 text-ivory text-sm focus:border-ivory-dim focus:outline-none placeholder:text-gray-500 transition-colors duration-200"
                 />
                 <button
                   onClick={() => {
                     void handleCheckpointedContinue();
                   }}
                   disabled={!canContinueCheckpointed}
-                  className="px-4 py-2.5 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none"
+                  className="px-6 py-3 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none"
                 >
                   {continuingCheckpointed ? "Continuing..." : "Continue Debate"}
                 </button>
               </div>
-              <p className="text-ivory-faint/40 text-[10px] text-center mt-1.5">
-                Optional interjection - the debate stays paused until you continue.
+              <p className="text-gray-500 text-xs text-center mt-2">
+                Optional interjection &mdash; the debate stays paused until you continue.
               </p>
             </div>
           </div>
@@ -424,7 +478,7 @@ export default function Debate() {
             {canGoVerdict ? (
               <button onClick={() => navigate("/verdict", { state: { debate, input } })} className="px-8 py-3 rounded-lg text-sm bg-path-risk text-void font-medium transition-[opacity,box-shadow] duration-200 cursor-pointer hover:shadow-[0_0_20px_rgba(212,168,67,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-risk focus-visible:ring-offset-2 focus-visible:ring-offset-void">See the Verdict</button>
             ) : nextRoundAvailable ? (
-              <button onClick={() => setCurrentRound((p) => p + 1)} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim hover:border-path-risk hover:text-ivory transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk">
+              <button onClick={() => goToRound(safeRound + 1)} className="px-6 py-3 rounded-lg text-sm border border-surface-light text-ivory-dim hover:border-path-risk hover:text-ivory transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-path-risk">
                 {nextRoundName ? `Next: ${nextRoundName}` : "Next round"} &rarr;
               </button>
             ) : nextRoundGenerating ? (
@@ -462,7 +516,7 @@ export default function Debate() {
 
         {/* Round navigation */}
         {(isCurrentRoundStreaming ? bothDone : visibleMessages >= 2) && transcript.length > 1 && (
-          <div className="mt-8"><RoundNav totalRounds={transcript.length} currentRound={safeRound} completedRounds={completedRoundsArr} onRoundClick={setCurrentRound} /></div>
+          <div className="mt-8"><RoundNav totalRounds={transcript.length} currentRound={safeRound} completedRounds={completedRoundsArr} onRoundClick={goToRound} /></div>
         )}
       </div>
     </div>

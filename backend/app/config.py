@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     origin_verify_header: str = ""
     origin_verify_secret: str = ""
 
+    # Turnstile CAPTCHA (anonymous debate starts)
+    turnstile_secret_key: str = ""
+
     # SES (check-in emails)
     ses_sender_email: str = ""
     ses_region: str = "us-east-1"

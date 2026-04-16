@@ -60,7 +60,7 @@ export function addInterjection(round: number, text: string) {
   notify();
 }
 
-export async function startDebateStream(payload: DecisionInput): Promise<void> {
+export async function startDebateStream(payload: DecisionInput, captchaToken?: string | null): Promise<void> {
   resetDebateStream();
   state.input = payload;
   abortCtrl = new AbortController();
@@ -68,7 +68,10 @@ export async function startDebateStream(payload: DecisionInput): Promise<void> {
   try {
     const res = await fetch(`${DEBATE_BASE}/api/debate/stream-tokens`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(captchaToken ? { "X-Captcha-Token": captchaToken } : {}),
+      },
       body: JSON.stringify(payload),
       signal: abortCtrl.signal,
     });
