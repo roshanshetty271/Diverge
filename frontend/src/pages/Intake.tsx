@@ -183,7 +183,7 @@ export default function Intake() {
               <div className="flex gap-3 mt-8">
                 <button onClick={handleAddContext} disabled={!canProceed} className="flex-1 py-3 px-6 rounded-lg text-sm bg-path-risk text-void font-medium disabled:opacity-30 disabled:cursor-not-allowed transition-opacity duration-200 cursor-pointer">Add context &rarr;</button>
                 <button onClick={() => void startDebate()} disabled={!canProceed || startingDebate} className="flex-1 py-3 px-6 rounded-lg text-sm bg-transparent border border-surface-light text-ivory-dim disabled:opacity-30 disabled:cursor-not-allowed hover:border-path-safe transition-colors duration-200 cursor-pointer">
-                  {startingDebate ? "Verifying..." : "Skip &mdash; just debate"}
+                  {startingDebate ? "Verifying..." : "Skip — just debate"}
                 </button>
               </div>
             </motion.div>
