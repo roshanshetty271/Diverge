@@ -18,6 +18,7 @@ Globals:
         DIVERGE_OPENAI_API_KEY: !Ref OpenAIApiKey
         DIVERGE_COMPREHEND_ENABLED: !Ref EnableComprehend
         DIVERGE_DEBUG: "false"
+        DIVERGE_RATE_LIMITING_ENABLED: "false"
         DIVERGE_PUBLIC_APP_URL: !Ref PublicAppUrl
         DIVERGE_TURNSTILE_SECRET_KEY: !Ref TurnstileSecretKey
 

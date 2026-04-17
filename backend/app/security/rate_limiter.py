@@ -125,10 +125,14 @@ def check_rate_limit(
     Implements exponential backoff for repeated violations.
     Raises HTTPException 429 if limit exceeded.
     """
+    settings = get_settings()
+
+    if not settings.rate_limiting_enabled:
+        logger.info("Rate limiting disabled; skipping check for %s", endpoint)
+        return
+
     subject = identity or _get_client_ip(request)
     client_key = f"{subject}:{endpoint}"
-
-    settings = get_settings()
 
     # Use DynamoDB if debates table is configured (production)
     if settings.debates_table and not settings.debug:

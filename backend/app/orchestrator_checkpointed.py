@@ -18,6 +18,7 @@ from app.orchestrator import (
     _get_resources,
     _persist_to_agentcore_memory,
     _run_round,
+    _stream_single_round,
 )
 from app.schemas import CheckpointedDebateResponse, RoundMetrics, RoundResult
 from app.tools.knowledge import research_insight
@@ -267,3 +268,122 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
         resources=[],
         next_round_number=next_round_index + 1,
     )
+
+
+def continue_checkpointed_streaming(debate_id: str, interjection: str | None = None):
+    """Generator that streams one round of a checkpointed debate via SSE events.
+
+    Yields the same event types as run_debate_token_streaming():
+      round_start, token, agent_done, round_complete, session_update, complete.
+
+    For non-final rounds: yields session_update after round_complete.
+    For the final round: generates verdict/timeline/resources synchronously, then yields complete.
+    """
+    session = get_debate_session(debate_id)
+    if not session:
+        raise ValueError("Debate session not found.")
+
+    if session.get("status") == "complete":
+        raise ValueError("Debate session is already complete.")
+
+    user_context = dict(session.get("input", {}) or {})
+    category = session.get("category", "general")
+    rounds = get_rounds(category)
+    tools = TOOL_MAP.get(category, [research_insight])
+    alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
+    transcript = _deserialize_transcript(session.get("transcript", []))
+    metrics = _deserialize_metrics(session.get("metrics", []))
+    debate_summary = session.get("debate_summary", "")
+    prev_beta = session.get("prev_beta")
+    current_round_index = int(session.get("current_round_index", len(transcript)))
+
+    if interjection:
+        debate_summary += f"\n[User interjects]: {interjection}\n"
+
+    if current_round_index >= len(rounds):
+        raise ValueError("Debate session is already at the final round.")
+
+    round_info = rounds[current_round_index]
+
+    # Stream one round — yields token events, returns (RoundResult, updated_summary)
+    result, debate_summary = yield from _stream_single_round(
+        round_index=current_round_index,
+        round_info=round_info,
+        user_context=user_context,
+        prev_beta=prev_beta,
+        debate_summary=debate_summary,
+        interjection=interjection,
+        tools=tools,
+        alpha_persona=alpha_persona,
+        beta_persona=beta_persona,
+    )
+
+    transcript.append(result)
+    metrics.append(result.metrics)
+    if result.status == "completed":
+        prev_beta = result.beta
+
+    next_round_index = current_round_index + 1
+    completed_rounds = len([r for r in transcript if r.status == "completed"])
+
+    if next_round_index >= len(rounds):
+        # Final round — generate verdict, timeline, resources in parallel
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            verdict_future = pool.submit(_build_partial_verdict, transcript, user_context, len(rounds))
+            timeline_future = pool.submit(_generate_structured_timeline, transcript, user_context) if completed_rounds >= 3 else None
+            resources_future = pool.submit(lambda: _serialize_models(_get_resources(user_context)))
+            verdict = verdict_future.result()
+            timeline = timeline_future.result() if timeline_future else None
+            resources = resources_future.result()
+
+        complete_debate_session(
+            debate_id,
+            {
+                "current_round_index": next_round_index,
+                "transcript": _serialize_models(transcript),
+                "metrics": _serialize_models(metrics),
+                "debate_summary": debate_summary,
+                "prev_beta": prev_beta,
+                "verdict": verdict,
+                "timeline": timeline.model_dump() if timeline else None,
+                "resources": resources,
+                "total_rounds": len(rounds),
+            },
+        )
+        _persist_to_agentcore_memory(debate_id, user_context, transcript, verdict)
+
+        yield {
+            "type": "complete",
+            "verdict": verdict,
+            "timeline": timeline.model_dump() if timeline else None,
+            "debate_id": debate_id,
+            "metrics": [m.model_dump() if m else None for m in metrics],
+            "completed_rounds": completed_rounds,
+            "total_rounds": len(rounds),
+            "resources": resources,
+        }
+    else:
+        # Non-final round — save and pause
+        update_debate_session(
+            debate_id,
+            {
+                "status": "paused",
+                "current_round_index": next_round_index,
+                "transcript": _serialize_models(transcript),
+                "metrics": _serialize_models(metrics),
+                "debate_summary": debate_summary,
+                "prev_beta": prev_beta,
+                "total_rounds": len(rounds),
+            },
+        )
+
+        yield {
+            "type": "session_update",
+            "status": "paused",
+            "debate_id": debate_id,
+            "completed_rounds": completed_rounds,
+            "total_rounds": len(rounds),
+            "next_round_number": next_round_index + 1,
+        }

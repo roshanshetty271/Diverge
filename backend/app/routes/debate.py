@@ -26,6 +26,7 @@ from app.schemas import (
 from app.db.dynamodb import get_debate_session, get_user_profile
 from app.orchestrator_checkpointed import (
     continue_checkpointed_debate,
+    continue_checkpointed_streaming,
     start_checkpointed_debate,
 )
 from app.orchestrator import run_debate, run_debate_streaming, run_debate_token_streaming, set_interjection
@@ -277,6 +278,67 @@ def continue_checkpointed_debate_route(
     except Exception:
         logger.error("Checkpointed continue failed for %s", debate_id, exc_info=False)
         raise HTTPException(status_code=500, detail="The debate could not continue. Please try again.")
+
+
+@router.post("/debate/session/{debate_id}/continue-stream")
+async def continue_checkpointed_stream_route(
+    debate_id: str,
+    body: DebateSessionContinueRequest,
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    """Stream one round of a checkpointed debate via SSE."""
+    _verify_origin(request)
+
+    # Same rate-limit bucket as sync /continue
+    if user:
+        check_rate_limit(request, max_requests=30, window_seconds=3600, endpoint="debate-continue", identity=f"user:{user['sub']}")
+    else:
+        check_rate_limit(request, max_requests=15, window_seconds=3600, endpoint="debate-continue")
+
+    session = get_debate_session(debate_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Debate session not found.")
+
+    session_user_id = session.get("user_id", "anonymous")
+    if session_user_id != "anonymous" and (not user or user.get("sub") != session_user_id):
+        raise HTTPException(status_code=403, detail="You don't have access to this debate session.")
+
+    interjection = (body.interjection or "").strip()
+    if interjection:
+        is_suspicious, _ = detect_injection(interjection)
+        if is_suspicious:
+            raise HTTPException(
+                status_code=400,
+                detail="Your input contains patterns that can't be processed.",
+            )
+        interjection = sanitize_user_input(interjection)
+
+    async def event_generator():
+        q: queue.Queue = queue.Queue()
+
+        def worker():
+            try:
+                for event in continue_checkpointed_streaming(debate_id, interjection or None):
+                    q.put(event)
+            except Exception as e:
+                q.put({"type": "error", "message": str(e)})
+            q.put(None)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        while True:
+            event = await asyncio.to_thread(q.get)
+            if event is None:
+                break
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/debate/stream")

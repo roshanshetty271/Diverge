@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import AgentMessage from "../components/AgentMessage";
@@ -6,9 +6,9 @@ import RoundNav from "../components/RoundNav";
 import { useToast } from "../components/Toast";
 import { CHECKPOINTED_DEBATE_ENABLED, ROUNDS } from "../utils/constants";
 import { loadDebateState, storeDebateState } from "../utils/debateStorage";
-import { subscribeDebate, getDebateStream, addInterjection } from "../utils/debateStream";
+import { subscribeDebate, getDebateStream, addInterjection, continueDebateStream } from "../utils/debateStream";
 import { getVoicePair, stopSpeaking } from "../utils/tts";
-import { continueCheckpointedDebate, getCapabilities, sendInterjection } from "../utils/api";
+import { getCapabilities, sendInterjection } from "../utils/api";
 import type { Capabilities, DebateResponse, DecisionInput, RoundResult, RoundMetrics } from "../types";
 
 const DecisionRadar = lazy(() => import("../components/DecisionRadar"));
@@ -31,9 +31,9 @@ export default function Debate() {
   const locationState = (location.state || {}) as { debate?: DebateResponse; input?: DecisionInput };
 
   const stream = getDebateStream();
-  const stored = !locationState.debate && stream.rounds.length === 0 ? loadDebateState() : null;
-
-  const isStreaming = stream.rounds.length > 0 || stream.streamingAgent !== null || stream.streamingRound > 0;
+  const usingStreamState = stream.usingStreamState;
+  const isActivelyStreaming = stream.isActivelyStreaming;
+  const stored = !locationState.debate && !usingStreamState ? loadDebateState() : null;
 
   const [, forceUpdate] = useState(0);
   const [currentRound, setCurrentRound] = useState(1);
@@ -46,17 +46,31 @@ export default function Debate() {
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [roundTransition, setRoundTransition] = useState(false);
   const [transitionLabel, setTransitionLabel] = useState({ name: "", title: "" });
+  const prevCompletedRef = useRef(
+    locationState.debate?.completed_rounds || stored?.debate?.completed_rounds || stream.completedRounds || 0,
+  );
 
-  const transcript: RoundResult[] = isStreaming ? stream.rounds : (locationState.debate?.transcript || stored?.debate?.transcript || []);
-  const input: DecisionInput | undefined | null = isStreaming ? stream.input : (locationState.input || stored?.input);
-  const allMetrics: (RoundMetrics | null)[] = isStreaming ? stream.metrics : (locationState.debate?.metrics || stored?.debate?.metrics || []);
-  const verdictReady = isStreaming ? stream.done && !!stream.verdict : true;
-  const debate: DebateResponse | undefined = isStreaming
-    ? { debate_id: stream.debateId || "", transcript: stream.rounds, verdict: stream.verdict || "", timeline: stream.timeline, metrics: stream.metrics, completed_rounds: stream.completedRounds, total_rounds: stream.totalRounds }
+  const transcript: RoundResult[] = usingStreamState ? stream.rounds : (locationState.debate?.transcript || stored?.debate?.transcript || []);
+  const input: DecisionInput | undefined | null = usingStreamState ? stream.input : (locationState.input || stored?.input);
+  const allMetrics: (RoundMetrics | null)[] = usingStreamState ? stream.metrics : (locationState.debate?.metrics || stored?.debate?.metrics || []);
+  const verdictReady = usingStreamState
+    ? stream.done && !!stream.verdict
+    : Boolean(locationState.debate?.verdict || stored?.debate?.verdict);
+  const debate: DebateResponse | undefined = usingStreamState
+    ? {
+        debate_id: stream.debateId || "",
+        transcript: stream.rounds,
+        verdict: stream.verdict || "",
+        timeline: stream.timeline,
+        metrics: stream.metrics,
+        completed_rounds: stream.completedRounds,
+        total_rounds: stream.totalRounds,
+        resources: stream.resources,
+      }
     : (locationState.debate || stored?.debate);
   const isCheckpointedMode = Boolean(
     CHECKPOINTED_DEBATE_ENABLED &&
-      !isStreaming &&
+      !isActivelyStreaming &&
       debate &&
       debate.completed_rounds < debate.total_rounds &&
       !debate.verdict,
@@ -65,26 +79,55 @@ export default function Debate() {
   const userName = input?.user_name || null;
   const [voiceA, voiceB] = getVoicePair(userName);
 
-  // Is the current round being actively streamed right now?
-  const isCurrentRoundStreaming = isStreaming && stream.streamingRound === currentRound;
-  const alphaIsStreaming = isCurrentRoundStreaming && stream.streamingAgent === "alpha";
-  const betaIsStreaming = isCurrentRoundStreaming && stream.streamingAgent === "beta";
-  const hasStreamingAlpha = isCurrentRoundStreaming && stream.streamingAlphaText.length > 0;
-  const hasStreamingBeta = isCurrentRoundStreaming && stream.streamingBetaText.length > 0;
+  // Stream-backed content can remain visible after the active SSE request closes.
+  const isCurrentRoundFromStream = usingStreamState && stream.streamingRound === currentRound;
+  const alphaIsStreaming = isActivelyStreaming && isCurrentRoundFromStream && stream.streamingAgent === "alpha";
+  const betaIsStreaming = isActivelyStreaming && isCurrentRoundFromStream && stream.streamingAgent === "beta";
+  const hasStreamingAlpha = isCurrentRoundFromStream && stream.streamingAlphaText.length > 0;
+  const hasStreamingBeta = isCurrentRoundFromStream && stream.streamingBetaText.length > 0;
 
   useEffect(() => {
     const unsub = subscribeDebate(() => {
       forceUpdate((c) => c + 1);
       const s = getDebateStream();
 
-      // Only auto-advance to round 1 when it first starts (not subsequent rounds)
-      if (s.streamingRound === 1 && currentRound === 1 && s.rounds.length === 0) {
-        setCurrentRound(1);
+      // Auto-advance to the streaming round (works for both initial and continue)
+      if (s.streamingRound > currentRound) {
+        setCurrentRound(s.streamingRound);
       }
 
+      // Persist on debate complete
       if (s.done && s.input && s.rounds.length > 0) {
+        prevCompletedRef.current = s.completedRounds;
         storeDebateState(
-          { debate_id: s.debateId || "", transcript: s.rounds, verdict: s.verdict || "", timeline: s.timeline, metrics: s.metrics, completed_rounds: s.completedRounds, total_rounds: s.totalRounds },
+          {
+            debate_id: s.debateId || "",
+            transcript: s.rounds,
+            verdict: s.verdict || "",
+            timeline: s.timeline,
+            metrics: s.metrics,
+            completed_rounds: s.completedRounds,
+            total_rounds: s.totalRounds,
+            resources: s.resources,
+          },
+          s.input,
+        );
+      }
+
+      // Persist only after a checkpointed continue stream pauses; avoid saving mid-flight full streams.
+      if (s.completedRounds > prevCompletedRef.current && !s.isActivelyStreaming && !s.done && s.rounds.length > 0 && s.input) {
+        prevCompletedRef.current = s.completedRounds;
+        storeDebateState(
+          {
+            debate_id: s.debateId || "",
+            transcript: s.rounds,
+            verdict: "",
+            timeline: null,
+            metrics: s.metrics,
+            completed_rounds: s.completedRounds,
+            total_rounds: s.totalRounds,
+            resources: s.resources,
+          },
           s.input,
         );
       }
@@ -111,7 +154,7 @@ export default function Debate() {
 
   // For non-streaming mode, reveal messages with a delay
   useEffect(() => {
-    if (isCurrentRoundStreaming) {
+    if (isCurrentRoundFromStream) {
       setVisibleMessages(2);
       setSkipped(true);
       return;
@@ -122,7 +165,7 @@ export default function Debate() {
     const t1 = setTimeout(() => setVisibleMessages(1), 500);
     const t2 = setTimeout(() => setVisibleMessages(2), 2500);
     return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [currentRound, isCurrentRoundStreaming]);
+  }, [currentRound, isCurrentRoundFromStream]);
 
   useEffect(() => {
     return () => stopSpeaking();
@@ -151,16 +194,16 @@ export default function Debate() {
   // Use streaming text if we're on the active streaming round, otherwise use completed text
   const alphaText = hasCompletedRound
     ? completedRound.alpha
-    : (isCurrentRoundStreaming ? stream.streamingAlphaText : "");
+    : (isCurrentRoundFromStream ? stream.streamingAlphaText : "");
   const betaText = hasCompletedRound
     ? completedRound.beta
-    : (isCurrentRoundStreaming ? stream.streamingBetaText : "");
+    : (isCurrentRoundFromStream ? stream.streamingBetaText : "");
 
   // Show alpha as soon as streaming or completed text exists
   const showAlpha = alphaText.length > 0 || alphaIsStreaming;
   const showBeta = betaText.length > 0 || betaIsStreaming;
 
-  if (!isStreaming && transcript.length === 0) {
+  if (!usingStreamState && transcript.length === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p className="text-ivory-dim">The timeline has diverged. <button onClick={() => navigate("/decide")} className="text-path-risk underline cursor-pointer">Start over</button></p>
@@ -169,14 +212,18 @@ export default function Debate() {
   }
 
   // Always show all rounds in the step indicator from the start
-  const totalRoundsToShow = stream.totalRounds || 5;
+  const totalRoundsToShow = debate?.total_rounds || stream.totalRounds || 5;
   const displayRounds = Array.from({ length: totalRoundsToShow }, (_, i) => {
     if (transcript[i]) return transcript[i];
     return { round_number: i + 1, round_name: ROUNDS[i]?.name || `Round ${i + 1}`, round_title: ROUNDS[i]?.title || "", alpha: "", beta: "", metrics: null, status: "pending" as const };
   });
 
   // The highest round the user can navigate to: completed rounds + the currently streaming round
-  const highestAvailableRound = Math.max(transcript.length, stream.streamingRound > 0 ? stream.streamingRound : 0, 1);
+  const highestAvailableRound = Math.max(
+    transcript.length,
+    usingStreamState && stream.streamingRound > 0 ? stream.streamingRound : 0,
+    1,
+  );
   const safeRound = Math.max(1, Math.min(currentRound, highestAvailableRound));
   const round = completedRound;
   const roundName = round?.round_name || ROUNDS[safeRound - 1]?.name || `Round ${safeRound}`;
@@ -205,43 +252,36 @@ export default function Debate() {
   // Has the user seen all content for this round?
   const bothDone = hasCompletedRound || (showAlpha && showBeta && !alphaIsStreaming && !betaIsStreaming && hasStreamingAlpha && hasStreamingBeta);
   // Is the next round already available (completed or streaming)?
-  const nextRoundAvailable = safeRound < transcript.length || (isStreaming && stream.streamingRound > safeRound);
+  const nextRoundAvailable = safeRound < transcript.length || (isActivelyStreaming && stream.streamingRound > safeRound);
   // Is the next round still being generated (not yet started)?
-  const nextRoundGenerating = isStreaming && !stream.done && safeRound >= transcript.length && stream.streamingRound <= safeRound && !isCurrentRoundStreaming;
+  const nextRoundGenerating = isActivelyStreaming && !stream.done && safeRound >= transcript.length && stream.streamingRound <= safeRound && !isCurrentRoundFromStream;
   const canGoVerdict = safeRound >= transcript.length && verdictReady && !!debate?.verdict;
   const canContinueCheckpointed =
     isCheckpointedMode &&
     safeRound === transcript.length &&
     visibleMessages >= 2 &&
-    !continuingCheckpointed;
+    !continuingCheckpointed &&
+    !stream.streamingContinue;
 
   const handleCheckpointedContinue = async () => {
-    if (!debate || !input || continuingCheckpointed) return;
+    if (!debate || !input || continuingCheckpointed || isActivelyStreaming) return;
 
+    const interjection = interjectionText.trim() || undefined;
+    setInterjectionText("");
+    if (interjection) {
+      const interjectionRound = Math.min(transcript.length + 1, debate.total_rounds);
+      addInterjection(interjectionRound, interjection);
+      setInterjectionSent((prev) => ({ ...prev, [interjectionRound]: true }));
+    }
     setContinuingCheckpointed(true);
     try {
-      const result = await continueCheckpointedDebate(
+      await continueDebateStream(
         debate.debate_id,
-        interjectionText.trim() || undefined,
+        transcript,
+        allMetrics,
+        input,
+        interjection,
       );
-      const nextDebate: DebateResponse = {
-        debate_id: result.debate_id,
-        transcript: result.transcript,
-        verdict: result.verdict || "",
-        timeline: result.timeline || null,
-        metrics: result.metrics,
-        completed_rounds: result.completed_rounds,
-        total_rounds: result.total_rounds,
-        resources: result.resources || [],
-      };
-
-      storeDebateState(nextDebate, input);
-      setInterjectionText("");
-      setCurrentRound(nextDebate.transcript.length);
-      navigate("/debate", {
-        replace: true,
-        state: { debate: nextDebate, input },
-      });
     } catch (err) {
       toast(err instanceof Error ? err.message : "Couldn't continue the debate.");
     } finally {
@@ -261,7 +301,7 @@ export default function Debate() {
             const stepNum = i + 1;
             const isActive = stepNum === safeRound;
             const isCompleted = stepNum <= transcript.length;
-            const isStreamingNow = isStreaming && stream.streamingRound === stepNum;
+            const isStreamingNow = isActivelyStreaming && stream.streamingRound === stepNum;
             const isReachable = stepNum <= highestAvailableRound;
             const rName = r.round_name || ROUNDS[i]?.name || `R${stepNum}`;
             const shortName = rName.replace("The ", "");
@@ -289,7 +329,7 @@ export default function Debate() {
 
         {/* Round header */}
         <div className="text-center mb-8">
-          <p className="text-ivory-faint text-xs font-mono uppercase tracking-widest">Round {safeRound} of {stream.totalRounds || 5}</p>
+          <p className="text-ivory-faint text-xs font-mono uppercase tracking-widest">Round {safeRound} of {debate?.total_rounds || stream.totalRounds || 5}</p>
           <h1 className="font-display text-2xl md:text-3xl text-ivory mt-1" style={{ fontWeight: 400 }}>{roundName}</h1>
           <p className="text-ivory-dim text-sm mt-1">{roundTitle}</p>
           {round?.status === "partial" && <p className="text-path-risk text-xs mt-2 font-mono">This round was only partially generated</p>}
@@ -333,7 +373,7 @@ export default function Debate() {
         {/* Chat bubbles */}
         <AnimatePresence mode="wait">
           <motion.div key={safeRound} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }} className="space-y-5">
-            {(isCurrentRoundStreaming ? showAlpha : visibleMessages >= 1) && (
+            {(isCurrentRoundFromStream ? showAlpha : visibleMessages >= 1) && (
               <AgentMessage
                 agentName={safeLabel}
                 message={alphaText}
@@ -343,7 +383,7 @@ export default function Debate() {
                 ttsEnabled={capabilities?.tts ?? false}
               />
             )}
-            {(isCurrentRoundStreaming ? showBeta : visibleMessages >= 2) && (
+            {(isCurrentRoundFromStream ? showBeta : visibleMessages >= 2) && (
               <AgentMessage
                 agentName={riskLabel}
                 message={betaText}
@@ -357,7 +397,7 @@ export default function Debate() {
         </AnimatePresence>
 
         {/* Skip button (only for non-streaming completed rounds) */}
-        {!isCurrentRoundStreaming && visibleMessages < 2 && !skipped && transcript.length > 0 && (
+        {!isCurrentRoundFromStream && visibleMessages < 2 && !skipped && transcript.length > 0 && (
           <div className="mt-4 text-center">
             <button onClick={revealAll} className="text-ivory-faint text-xs font-mono hover:text-ivory-dim transition-colors cursor-pointer">
               Skip &rarr;
@@ -366,7 +406,7 @@ export default function Debate() {
         )}
 
         {/* Streaming indicator */}
-        {isCurrentRoundStreaming && (alphaIsStreaming || betaIsStreaming) && (
+        {isCurrentRoundFromStream && (alphaIsStreaming || betaIsStreaming) && (
           <div className="mt-4 text-center">
             <p className="text-ivory-faint text-xs font-mono animate-pulse">
               {alphaIsStreaming ? `${safeLabel} is arguing\u2026` : `${riskLabel} is responding\u2026`}
@@ -375,7 +415,7 @@ export default function Debate() {
         )}
 
         {/* User interjection input — shown between rounds when streaming */}
-        {isStreaming && !stream.done && bothDone && !alphaIsStreaming && !betaIsStreaming && hasCompletedRound && safeRound < 5 && !interjectionSent[safeRound] && (
+        {!CHECKPOINTED_DEBATE_ENABLED && usingStreamState && !stream.done && bothDone && !alphaIsStreaming && !betaIsStreaming && hasCompletedRound && safeRound < 5 && !interjectionSent[safeRound] && (
           <div className="mt-6">
             <div className="max-w-md mx-auto">
               <div className="flex gap-2">
@@ -449,7 +489,7 @@ export default function Debate() {
                   placeholder="Something the next round should consider?"
                   maxLength={500}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !continuingCheckpointed) {
+                    if (e.key === "Enter" && !continuingCheckpointed && !isActivelyStreaming) {
                       void handleCheckpointedContinue();
                     }
                   }}
@@ -473,7 +513,7 @@ export default function Debate() {
         )}
 
         {/* Next / Generating / Verdict button */}
-        {(isCurrentRoundStreaming ? bothDone : visibleMessages >= 2) && !alphaIsStreaming && !betaIsStreaming && (
+        {(isCurrentRoundFromStream ? bothDone : visibleMessages >= 2) && !alphaIsStreaming && !betaIsStreaming && (
           <div className="mt-8 text-center">
             {canGoVerdict ? (
               <button onClick={() => navigate("/verdict", { state: { debate, input } })} className="px-8 py-3 rounded-lg text-sm bg-path-risk text-void font-medium transition-[opacity,box-shadow] duration-200 cursor-pointer hover:shadow-[0_0_20px_rgba(212,168,67,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-risk focus-visible:ring-offset-2 focus-visible:ring-offset-void">See the Verdict</button>
@@ -483,7 +523,7 @@ export default function Debate() {
               </button>
             ) : nextRoundGenerating ? (
               <p className="text-ivory-faint text-xs font-mono animate-pulse">Generating next round&hellip;</p>
-            ) : !verdictReady && isStreaming && !stream.done ? (
+            ) : !verdictReady && isActivelyStreaming && !stream.done ? (
               <p className="text-ivory-faint text-xs font-mono animate-pulse">
                 {stream.streamingAgent === "verdict" ? "The verdict is being written\u2026" : "Generating verdict\u2026"}
               </p>
@@ -492,7 +532,7 @@ export default function Debate() {
         )}
 
         {/* Charts */}
-        {(isCurrentRoundStreaming ? bothDone : visibleMessages >= 2) && currentMetrics && (
+        {(isCurrentRoundFromStream ? bothDone : visibleMessages >= 2) && currentMetrics && (
           <div className="mt-10">
             <div className="flex gap-1 mb-2">
               {availableChartTabs.map((tab) => (
@@ -515,7 +555,7 @@ export default function Debate() {
         )}
 
         {/* Round navigation */}
-        {(isCurrentRoundStreaming ? bothDone : visibleMessages >= 2) && transcript.length > 1 && (
+        {(isCurrentRoundFromStream ? bothDone : visibleMessages >= 2) && transcript.length > 1 && (
           <div className="mt-8"><RoundNav totalRounds={transcript.length} currentRound={safeRound} completedRounds={completedRoundsArr} onRoundClick={goToRound} /></div>
         )}
       </div>

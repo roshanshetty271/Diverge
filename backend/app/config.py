@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     # Rate limiting
+    # Temporary testing kill switch. Set DIVERGE_RATE_LIMITING_ENABLED=true to restore.
+    rate_limiting_enabled: bool = False
     max_debates_per_hour: int = 5
 
     # Origin verification (protects Function URL from direct access)

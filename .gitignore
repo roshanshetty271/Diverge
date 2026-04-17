@@ -49,6 +49,8 @@ packaged.yaml
 response.json
 messages.json
 SAM-VERCEL-NOTES.txt
+backend/test_e2e_debates.py
+backend/test_output/
 
 # Logs
 *.log

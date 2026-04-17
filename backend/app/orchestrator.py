@@ -887,6 +887,206 @@ def _run_agent_with_streaming(
     return _safe_agent_output(raw)
 
 
+def _stream_single_round(
+    round_index: int,
+    round_info: dict,
+    user_context: dict,
+    prev_beta: str | None,
+    debate_summary: str,
+    interjection: str | None,
+    tools: list,
+    alpha_persona: dict,
+    beta_persona: dict,
+):
+    """Generator that streams one round of Alpha→Beta debate with token events.
+
+    Yields: round_start, token, agent_done, round_complete events.
+    Returns: (RoundResult, updated_debate_summary) via generator return value.
+    Caller uses: result, summary = yield from _stream_single_round(...)
+    """
+    i = round_index
+
+    yield {
+        "type": "round_start",
+        "round": i + 1,
+        "round_name": round_info["name"],
+        "round_title": round_info["title"],
+    }
+
+    path_a = user_context["path_a"]
+    path_b = user_context["path_b"]
+    timeline = round_info.get("timeline", f"round {i + 1}")
+    chronology_guardrail = _build_chronology_guardrail(user_context, round_info, i)
+
+    token_q: queue.Queue = queue.Queue()
+    alpha_response = ""
+    beta_response = ""
+
+    if i == 0:
+        alpha_input = (
+            f"{chronology_guardrail}\n\n"
+            f'You chose "{path_a}". You are living in {timeline} right now. '
+            f'Do NOT use the phrase "I remember" or tell this in the past tense. '
+            f"Speak from one emotionally loaded moment that makes this reality feel current, physical, and concrete. "
+            f"Do not trap the rest of the timeline inside this exact room or trivial detail."
+        )
+    else:
+        alpha_input = _build_runtime_wrapper_prompt(
+            debate_summary=debate_summary,
+            interjection=interjection,
+            path=path_a,
+            timeline=timeline,
+            prev_response=prev_beta or "",
+            chronology_guardrail=chronology_guardrail,
+        )
+
+    try:
+        alpha_result_holder: list[str] = []
+        alpha_error_holder: list[Exception] = []
+
+        def run_alpha():
+            try:
+                text = _run_agent_with_streaming(
+                    _build_round_system_prompt(
+                        build_alpha_prompt(user_context, round_info, alpha_persona),
+                        user_context,
+                        round_info,
+                        i,
+                        "Alpha",
+                    ),
+                    alpha_input, tools, token_q, "alpha", i + 1,
+                )
+                alpha_result_holder.append(text)
+            except Exception as e:
+                alpha_error_holder.append(e)
+            finally:
+                token_q.put({"type": "_done"})
+
+        thread = threading.Thread(target=run_alpha, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                event = token_q.get(timeout=180)
+            except queue.Empty:
+                break
+            if event.get("type") == "_done":
+                break
+            yield event
+
+        thread.join(timeout=5)
+
+        if alpha_error_holder:
+            raise alpha_error_holder[0]
+        alpha_response = validate_safe_content(
+            validate_agent_output(alpha_result_holder[0] if alpha_result_holder else "")
+        )
+        if not alpha_response:
+            raise ValueError("Alpha agent returned empty response")
+
+        yield {"type": "agent_done", "agent": "alpha", "round": i + 1}
+
+        beta_q: queue.Queue = queue.Queue()
+        beta_input = _build_runtime_wrapper_prompt(
+            debate_summary=debate_summary,
+            interjection=interjection,
+            path=path_b,
+            timeline=timeline,
+            prev_response=alpha_response,
+            chronology_guardrail=chronology_guardrail,
+        )
+
+        beta_result_holder: list[str] = []
+        beta_error_holder: list[Exception] = []
+
+        def run_beta():
+            try:
+                text = _run_agent_with_streaming(
+                    _build_round_system_prompt(
+                        build_beta_prompt(user_context, round_info, beta_persona),
+                        user_context,
+                        round_info,
+                        i,
+                        "Beta",
+                    ),
+                    beta_input, tools, beta_q, "beta", i + 1,
+                )
+                beta_result_holder.append(text)
+            except Exception as e:
+                beta_error_holder.append(e)
+            finally:
+                beta_q.put({"type": "_done"})
+
+        beta_thread = threading.Thread(target=run_beta, daemon=True)
+        beta_thread.start()
+
+        while True:
+            try:
+                event = beta_q.get(timeout=180)
+            except queue.Empty:
+                break
+            if event.get("type") == "_done":
+                break
+            yield event
+
+        beta_thread.join(timeout=5)
+
+        if beta_error_holder:
+            raise beta_error_holder[0]
+        beta_response = validate_safe_content(
+            validate_agent_output(beta_result_holder[0] if beta_result_holder else "")
+        )
+        if not beta_response:
+            raise ValueError("Beta agent returned empty response")
+
+        yield {"type": "agent_done", "agent": "beta", "round": i + 1}
+
+        debate_text = f"Path A argued:\n{alpha_response}\n\nPath B argued:\n{beta_response}"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            metrics_future = pool.submit(extract_metrics, debate_text)
+            sentiment_future = pool.submit(analyze_round_sentiment, alpha_response, beta_response)
+            metrics = metrics_future.result()
+            sentiment = sentiment_future.result()
+
+        result = RoundResult(
+            round_number=i + 1,
+            round_name=round_info["name"],
+            round_title=round_info["title"],
+            alpha=alpha_response,
+            beta=beta_response,
+            metrics=metrics,
+            sentiment=sentiment,
+            status="completed",
+        )
+        _log_debug_round_trace(i + 1, round_info["name"], alpha_response, beta_response)
+
+    except Exception as e:
+        logger.warning(f"Token-streaming round {i + 1} failed: {type(e).__name__}: {e}")
+        result = RoundResult(
+            round_number=i + 1,
+            round_name=round_info["name"],
+            round_title=round_info["title"],
+            alpha=alpha_response or "This perspective could not be generated.",
+            beta=beta_response or "This perspective could not be generated.",
+            metrics=None,
+            status="partial",
+        )
+
+    updated_summary = debate_summary
+    if result.status == "completed":
+        updated_summary += f"\n[Round {i + 1} - {round_info['name']}]\n"
+        updated_summary += f"Path A argued: {result.alpha[:400]}...\n"
+        updated_summary += f"Path B argued: {result.beta[:400]}...\n"
+
+    yield {
+        "type": "round_complete",
+        "round": i + 1,
+        "data": result.model_dump(),
+    }
+
+    return result, updated_summary
+
+
 def run_debate_token_streaming(user_context: dict):
     """Generator yielding token-level events for real-time UI streaming.
 
@@ -926,7 +1126,6 @@ def run_debate_token_streaming(user_context: dict):
     for i, round_info in enumerate(rounds):
         logger.info(f"Token-streaming debate {debate_id}: round {i + 1}")
 
-        # Check for user interjection from previous round
         interjection = _pop_interjection(debate_id) if i > 0 else None
         if interjection:
             debate_summary += f"\n[User interjects]: {interjection}\n"
@@ -936,189 +1135,21 @@ def run_debate_token_streaming(user_context: dict):
                 "text": interjection,
             }
 
-        yield {
-            "type": "round_start",
-            "round": i + 1,
-            "round_name": round_info["name"],
-            "round_title": round_info["title"],
-        }
-
-        path_a = user_context["path_a"]
-        path_b = user_context["path_b"]
-        timeline = round_info.get("timeline", f"round {i + 1}")
-        chronology_guardrail = _build_chronology_guardrail(user_context, round_info, i)
-
-        # --- Alpha agent (streams tokens via queue) ---
-        token_q: queue.Queue = queue.Queue()
-        alpha_response = ""
-        beta_response = ""
-
-        if i == 0:
-            alpha_input = (
-                f"{chronology_guardrail}\n\n"
-                f'You chose "{path_a}". You are living in {timeline} right now. '
-                f'Do NOT use the phrase "I remember" or tell this in the past tense. '
-                f"Speak from one emotionally loaded moment that makes this reality feel current, physical, and concrete. "
-                f"Do not trap the rest of the timeline inside this exact room or trivial detail."
-            )
-        else:
-            alpha_input = _build_runtime_wrapper_prompt(
-                debate_summary=debate_summary,
-                interjection=interjection,
-                path=path_a,
-                timeline=timeline,
-                prev_response=prev_beta or "",
-                chronology_guardrail=chronology_guardrail,
-            )
-
-        try:
-            # Run alpha in a thread so we can drain tokens from the queue
-            alpha_result_holder: list[str] = []
-            alpha_error_holder: list[Exception] = []
-
-            def run_alpha():
-                try:
-                    text = _run_agent_with_streaming(
-                        _build_round_system_prompt(
-                            build_alpha_prompt(user_context, round_info, alpha_persona),
-                            user_context,
-                            round_info,
-                            i,
-                            "Alpha",
-                        ),
-                        alpha_input, tools, token_q, "alpha", i + 1,
-                    )
-                    alpha_result_holder.append(text)
-                except Exception as e:
-                    alpha_error_holder.append(e)
-                finally:
-                    token_q.put({"type": "_done"})
-
-            thread = threading.Thread(target=run_alpha, daemon=True)
-            thread.start()
-
-            while True:
-                try:
-                    event = token_q.get(timeout=180)
-                except queue.Empty:
-                    break
-                if event.get("type") == "_done":
-                    break
-                yield event
-
-            thread.join(timeout=5)
-
-            if alpha_error_holder:
-                raise alpha_error_holder[0]
-            alpha_response = validate_safe_content(
-                validate_agent_output(alpha_result_holder[0] if alpha_result_holder else "")
-            )
-            if not alpha_response:
-                raise ValueError("Alpha agent returned empty response")
-
-            yield {"type": "agent_done", "agent": "alpha", "round": i + 1}
-
-            # --- Beta agent (streams tokens via queue) ---
-            beta_q: queue.Queue = queue.Queue()
-            beta_input = _build_runtime_wrapper_prompt(
-                debate_summary=debate_summary,
-                interjection=interjection,
-                path=path_b,
-                timeline=timeline,
-                prev_response=alpha_response,
-                chronology_guardrail=chronology_guardrail,
-            )
-
-            beta_result_holder: list[str] = []
-            beta_error_holder: list[Exception] = []
-
-            def run_beta():
-                try:
-                    text = _run_agent_with_streaming(
-                        _build_round_system_prompt(
-                            build_beta_prompt(user_context, round_info, beta_persona),
-                            user_context,
-                            round_info,
-                            i,
-                            "Beta",
-                        ),
-                        beta_input, tools, beta_q, "beta", i + 1,
-                    )
-                    beta_result_holder.append(text)
-                except Exception as e:
-                    beta_error_holder.append(e)
-                finally:
-                    beta_q.put({"type": "_done"})
-
-            beta_thread = threading.Thread(target=run_beta, daemon=True)
-            beta_thread.start()
-
-            while True:
-                try:
-                    event = beta_q.get(timeout=180)
-                except queue.Empty:
-                    break
-                if event.get("type") == "_done":
-                    break
-                yield event
-
-            beta_thread.join(timeout=5)
-
-            if beta_error_holder:
-                raise beta_error_holder[0]
-            beta_response = validate_safe_content(
-                validate_agent_output(beta_result_holder[0] if beta_result_holder else "")
-            )
-            if not beta_response:
-                raise ValueError("Beta agent returned empty response")
-
-            yield {"type": "agent_done", "agent": "beta", "round": i + 1}
-
-            debate_text = f"Path A argued:\n{alpha_response}\n\nPath B argued:\n{beta_response}"
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                metrics_future = pool.submit(extract_metrics, debate_text)
-                sentiment_future = pool.submit(analyze_round_sentiment, alpha_response, beta_response)
-                metrics = metrics_future.result()
-                sentiment = sentiment_future.result()
-
-            result = RoundResult(
-                round_number=i + 1,
-                round_name=round_info["name"],
-                round_title=round_info["title"],
-                alpha=alpha_response,
-                beta=beta_response,
-                metrics=metrics,
-                sentiment=sentiment,
-                status="completed",
-            )
-            _log_debug_round_trace(i + 1, round_info["name"], alpha_response, beta_response)
-
-        except Exception as e:
-            logger.warning(f"Token-streaming round {i + 1} failed: {type(e).__name__}: {e}")
-            result = RoundResult(
-                round_number=i + 1,
-                round_name=round_info["name"],
-                round_title=round_info["title"],
-                alpha=alpha_response or "This perspective could not be generated.",
-                beta=beta_response or "This perspective could not be generated.",
-                metrics=None,
-                status="partial",
-            )
+        result, debate_summary = yield from _stream_single_round(
+            round_index=i,
+            round_info=round_info,
+            user_context=user_context,
+            prev_beta=prev_beta,
+            debate_summary=debate_summary,
+            interjection=interjection,
+            tools=tools,
+            alpha_persona=alpha_persona,
+            beta_persona=beta_persona,
+        )
 
         transcript.append(result)
         all_metrics.append(result.metrics)
         prev_beta = result.beta if result.status == "completed" else prev_beta
-
-        if result.status == "completed":
-            debate_summary += f"\n[Round {i + 1} - {round_info['name']}]\n"
-            debate_summary += f"Path A argued: {result.alpha[:400]}...\n"
-            debate_summary += f"Path B argued: {result.beta[:400]}...\n"
-
-        yield {
-            "type": "round_complete",
-            "round": i + 1,
-            "data": result.model_dump(),
-        }
 
     # --- Verdict with streaming ---
     completed = [r for r in transcript if r.status == "completed"]
