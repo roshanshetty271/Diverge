@@ -76,6 +76,15 @@ class ContentViolation:
     detail: str
 
 
+CATEGORY_BIOGRAPHY_EXEMPTIONS: dict[str, tuple[str, ...]] = {
+    "relationship": ("partner", "family"),
+    "health": ("family",),
+    "career": ("property",),
+    "financial": ("property",),
+    "startup": ("property",),
+}
+
+
 @dataclass
 class GroundingProfile:
     allowed_biography_terms: set[str] = field(default_factory=set)
@@ -84,6 +93,7 @@ class GroundingProfile:
     motif_counts: Counter[str] = field(default_factory=Counter)
     user_language: str = ""
     sparse_context: bool = False
+    category: str = ""
 
 
 @dataclass
@@ -142,7 +152,12 @@ def _count_motifs(text: str) -> Counter[str]:
     return counts
 
 
-def build_grounding_profile(user_ctx: dict, prior_texts: list[str] | None = None) -> GroundingProfile:
+def build_grounding_profile(
+    user_ctx: dict,
+    prior_texts: list[str] | None = None,
+    *,
+    category: str = "",
+) -> GroundingProfile:
     """Build the grounding profile from user input and validated prior transcript."""
     context_text = _collect_context_text(user_ctx, prior_texts)
     user_language = "\n".join(
@@ -153,16 +168,21 @@ def build_grounding_profile(user_ctx: dict, prior_texts: list[str] | None = None
         )
         if part
     ).lower()
-    sparse_context = len(re.findall(r"[A-Za-z0-9']+", context_text)) < 45
+    sparse_context = len(re.findall(r"[A-Za-z0-9']+", context_text)) < 25
     prior_text_blob = "\n".join(prior_texts or [])
 
+    allowed_bio = _extract_biography_terms(context_text)
+    for group_key in CATEGORY_BIOGRAPHY_EXEMPTIONS.get(category.lower(), ()):
+        allowed_bio.update(BIOGRAPHY_TERMS.get(group_key, ()))
+
     return GroundingProfile(
-        allowed_biography_terms=_extract_biography_terms(context_text),
+        allowed_biography_terms=allowed_bio,
         allowed_money_tokens=_extract_money_tokens(context_text),
         allowed_location_phrases=_extract_location_phrases(context_text),
         motif_counts=_count_motifs(prior_text_blob),
         user_language=user_language,
         sparse_context=sparse_context,
+        category=category.lower(),
     )
 
 
@@ -223,8 +243,9 @@ def validate_generated_text(
             if match:
                 violations.append(ContentViolation(label, f'Verdict used forbidden pattern "{match.group(0)}".'))
 
-    if profile.sparse_context and re.search(r"\b(?:my|our)\s+(?:daughter|son|wife|husband|partner|house|mortgage|condo|backyard|workshop)\b", lowered):
-        violations.append(ContentViolation("sparse_context_biography", "Sparse-context output introduced specific biography or property details."))
+    if profile.sparse_context and not profile.category in CATEGORY_BIOGRAPHY_EXEMPTIONS:
+        if re.search(r"\b(?:my|our)\s+(?:daughter|son|wife|husband|partner|house|mortgage|condo|backyard|workshop)\b", lowered):
+            violations.append(ContentViolation("sparse_context_biography", "Sparse-context output introduced specific biography or property details."))
 
     return ValidationResult(violations=violations)
 

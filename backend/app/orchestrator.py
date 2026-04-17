@@ -118,6 +118,7 @@ def _guardrail_stats(user_ctx: dict) -> dict[str, int]:
             "biography_violations": 0,
             "style_violations": 0,
             "resource_selector_fallbacks": 0,
+            "fallback_count": 0,
         },
     )
     return stats
@@ -196,7 +197,7 @@ def _generate_with_guardrails(
             rewrite_instruction = strict_grounding_rewrite_brief()
             continue
 
-        profile = build_grounding_profile(user_ctx, prior_texts)
+        profile = build_grounding_profile(user_ctx, prior_texts, category=user_ctx.get("_category", ""))
         result = validate_generated_text(
             text,
             profile,
@@ -211,13 +212,26 @@ def _generate_with_guardrails(
         _record_guardrail_failures(user_ctx, result)
         rewrite_instruction = format_violation_report(result) if attempt == 0 else strict_grounding_rewrite_brief()
 
+    logger.warning("Guardrail exhaustion: returning fallback for stage=%s debate_id=%s", stage_label, debate_id)
+    _guardrail_stats(user_ctx)["fallback_count"] = _guardrail_stats(user_ctx).get("fallback_count", 0) + 1
     return fallback_text
 
 
-def _build_round_fallback_text(path: str, timeline: str) -> str:
+_CATEGORY_FALLBACK_FLAVOR: dict[str, tuple[str, str]] = {
+    "career": ("professional routine", "career path"),
+    "startup": ("founder reality", "entrepreneurial bet"),
+    "relationship": ("emotional landscape", "relationship dynamic"),
+    "health": ("daily habits", "lifestyle shift"),
+    "education": ("learning commitment", "educational investment"),
+    "financial": ("financial rhythm", "money decision"),
+}
+
+
+def _build_round_fallback_text(path: str, timeline: str, category: str = "") -> str:
+    flavor = _CATEGORY_FALLBACK_FLAVOR.get(category, ("daily reality", "life choice"))
     return (
-        f"Right now, living with {path.lower()} in {timeline} feels less dramatic and more concrete. "
-        "The tradeoff is real, and it keeps showing up in daily pressure, relief, and responsibility."
+        f"Right now, living with {path.lower()} in {timeline} shows up in your {flavor[0]}. "
+        f"The tradeoff behind this {flavor[1]} is real, and it surfaces in pressure, relief, and responsibility."
     )
 
 
@@ -564,7 +578,7 @@ def _validate_timeline_core(
     user_ctx: dict,
 ) -> ValidationResult:
     """Validate each timeline passage against grounding/style guardrails."""
-    profile = build_grounding_profile(user_ctx, _validated_transcript_texts(transcript))
+    profile = build_grounding_profile(user_ctx, _validated_transcript_texts(transcript), category=user_ctx.get("_category", ""))
     all_violations = []
     fields = [
         ("timeline.stage_01.path_a", timeline.stage_01_the_ripple_year_1.path_a_safe),
@@ -593,24 +607,24 @@ def _build_structured_timeline_fallback(user_ctx: dict) -> StructuredTimeline:
     stage06 = _build_stage06_items(user_ctx)
     return StructuredTimeline(
         stage_01_the_ripple_year_1={
-            "path_a_safe": f"One year in, {path_a.lower()} feels real in the day-to-day tradeoffs, not just in theory.",
-            "path_b_bet": f"One year in, {path_b.lower()} feels real in the day-to-day tradeoffs, not just in theory.",
+            "path_a_safe": f"One year in, {path_a.lower()} has settled into a familiar rhythm — the stability is real, but so is the quiet cost of staying.",
+            "path_b_bet": f"One year in, {path_b.lower()} still feels uncertain — the discomfort is real, but so is the energy that comes from having moved.",
         },
         stage_02_the_ledger_year_3={
-            "path_a_safe": f"Three years in, {path_a.lower()} has turned into a pattern of costs and protections that is hard to ignore.",
-            "path_b_bet": f"Three years in, {path_b.lower()} has turned into a pattern of costs and protections that is hard to ignore.",
+            "path_a_safe": f"Three years in, {path_a.lower()} has compounded into predictable routines and protections that feel harder to walk away from.",
+            "path_b_bet": f"Three years in, {path_b.lower()} has compounded into new skills and connections that did not exist before the leap.",
         },
         stage_03_the_mirror_year_5={
-            "path_a_safe": f"Five years in, {path_a.lower()} has clearly shaped identity, energy, and what feels possible next.",
-            "path_b_bet": f"Five years in, {path_b.lower()} has clearly shaped identity, energy, and what feels possible next.",
+            "path_a_safe": f"Five years in, {path_a.lower()} has shaped who you are — the comfort is earned, but the unlived possibilities still surface.",
+            "path_b_bet": f"Five years in, {path_b.lower()} has shaped who you are — the growth is earned, but the costs and sacrifices still surface.",
         },
         stage_04_the_ghost_year_10={
-            "path_a_safe": f"Ten years in, {path_a.lower()} carries a long tail of reliefs and tradeoffs that can no longer be abstracted away.",
-            "path_b_bet": f"Ten years in, {path_b.lower()} carries a long tail of reliefs and tradeoffs that can no longer be abstracted away.",
+            "path_a_safe": f"Ten years in, {path_a.lower()} carries a long tail of security and regret that can no longer be separated.",
+            "path_b_bet": f"Ten years in, {path_b.lower()} carries a long tail of growth and tradeoffs that can no longer be abstracted away.",
         },
         stage_05_the_knot_final_words={
-            "path_a_safe": f"{path_a} protects something important, but it asks for a real cost.",
-            "path_b_bet": f"{path_b} opens something meaningful, but it asks for a real cost.",
+            "path_a_safe": f"{path_a} protects something important, but it asks for a real cost in unlived possibility.",
+            "path_b_bet": f"{path_b} opens something meaningful, but it asks for a real cost in comfort and certainty.",
             "verdict_path_of_least_regret": "The path of least regret depends on which form of uncertainty this person is actually willing to carry.",
         },
         stage_06_what_to_explore_next=stage06,
@@ -733,7 +747,7 @@ def _run_round(
                 transcript=transcript,
                 content_kind="round",
                 stage_label=f"round_{round_num + 1}.alpha",
-                fallback_text=_build_round_fallback_text(path_a, timeline),
+                fallback_text=_build_round_fallback_text(path_a, timeline, user_ctx.get("_category", "")),
                 generator=lambda rewrite_instruction: validate_safe_content(
                     validate_agent_output(
                         _safe_agent_output(
@@ -771,7 +785,7 @@ def _run_round(
                 extra_prior_texts=[alpha_response],
                 content_kind="round",
                 stage_label=f"round_{round_num + 1}.beta",
-                fallback_text=_build_round_fallback_text(path_b, timeline),
+                fallback_text=_build_round_fallback_text(path_b, timeline, user_ctx.get("_category", "")),
                 generator=lambda rewrite_instruction: validate_safe_content(
                     validate_agent_output(
                         _safe_agent_output(
@@ -945,22 +959,27 @@ def run_debate(user_context: dict) -> DebateResponse:
     completed = [r for r in transcript if r.status == "completed"]
     timeline = None
     if len(completed) >= 3:
-        verdict = _generate_verdict(transcript, user_context)
-        timeline = _generate_structured_timeline(transcript, user_context)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            verdict_future = pool.submit(_generate_verdict, transcript, user_context)
+            timeline_future = pool.submit(_generate_structured_timeline, transcript, user_context)
+            resources_future = pool.submit(_get_resources, user_context)
+            verdict = verdict_future.result()
+            timeline = timeline_future.result()
+            resources = resources_future.result()
     elif len(completed) >= 1:
         verdict = (
             f"Only {len(completed)} of 5 rounds completed successfully. "
             "The AI service may be experiencing high demand. "
             "Here's a partial analysis based on available rounds."
         )
+        resources = _get_resources(user_context)
     else:
         verdict = "The debate could not be completed. Please check your AWS credentials and Bedrock model access, then try again."
+        resources = _get_resources(user_context)
 
     elapsed = time.time() - start_time
     logger.info(f"Debate {debate_id} finished in {elapsed:.1f}s ({len(completed)}/{len(rounds)} rounds, category={category})")
     logger.info("Content guardrail stats debate_id=%s stats=%s", debate_id, _guardrail_stats(user_context))
-
-    resources = _get_resources(user_context)
 
     response = DebateResponse(
         debate_id=debate_id,

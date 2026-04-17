@@ -116,16 +116,52 @@ RESOURCE_BOTTLENECK_TAGS: dict[tuple[str, str], tuple[str, ...]] = {
     ("concept", "Sunk-Cost Fallacy"): ("sunk_cost", "loss_aversion"),
 }
 
-BOTTLENECK_WHY_SUFFIX = {
-    "fear_of_failure": "It helps separate real downside from imagined catastrophe.",
-    "fear_of_rejection": "It helps make emotional risk feel legible instead of overwhelming.",
-    "sunk_cost": "It helps cut through loyalty to past effort and return to the present choice.",
-    "loss_aversion": "It helps slow down the instinct to protect what is familiar at any cost.",
-    "scarcity_panic": "It helps turn money fear into a clearer tradeoff instead of a fog of dread.",
-    "identity_foreclosure": "It helps loosen the story that one decision has to define who you are forever.",
-    "perfectionism": "It helps replace waiting for certainty with a smaller, testable next move.",
-    "burnout_avoidance": "It helps make change feel sustainable instead of like another impossible demand.",
-    "family_duty_pressure": "It helps hold responsibility and self-direction in the same frame.",
+BOTTLENECK_WHY_SUFFIX: dict[str, dict[str, str]] = {
+    "fear_of_failure": {
+        "book": "It builds a framework for separating real risk from imagined catastrophe.",
+        "video": "It reframes failure as part of the process rather than a final verdict.",
+        "concept": "It gives you a mental model for sizing downside honestly.",
+    },
+    "fear_of_rejection": {
+        "book": "It makes emotional risk feel legible instead of overwhelming.",
+        "video": "It normalizes the discomfort of putting yourself out there.",
+        "concept": "It names the pattern so the fear loses some of its grip.",
+    },
+    "sunk_cost": {
+        "book": "It cuts through loyalty to past effort and returns you to the present choice.",
+        "video": "It shows how others walked away from investments that were no longer serving them.",
+        "concept": "It separates what you have already spent from what is still worth spending.",
+    },
+    "loss_aversion": {
+        "book": "It slows down the instinct to protect what is familiar at any cost.",
+        "video": "It reframes what you are actually losing by not moving.",
+        "concept": "It explains why a possible loss feels louder than a bigger gain.",
+    },
+    "scarcity_panic": {
+        "book": "It turns money fear into a clearer tradeoff instead of a fog of dread.",
+        "video": "It grounds the financial anxiety in actual numbers rather than worst-case spirals.",
+        "concept": "It helps you calculate real runway instead of imagining freefall.",
+    },
+    "identity_foreclosure": {
+        "book": "It loosens the story that one decision has to define who you are forever.",
+        "video": "It shows how identity shifts happen gradually, not all at once.",
+        "concept": "It names the trap of locking in a self-image too early.",
+    },
+    "perfectionism": {
+        "book": "It replaces waiting for certainty with a smaller, testable next move.",
+        "video": "It demonstrates why good enough now beats perfect later.",
+        "concept": "It gives you permission to act before you feel ready.",
+    },
+    "burnout_avoidance": {
+        "book": "It makes change feel sustainable instead of like another impossible demand.",
+        "video": "It shows how small shifts compound without requiring a dramatic overhaul.",
+        "concept": "It reframes rest and recovery as part of the decision, not a delay.",
+    },
+    "family_duty_pressure": {
+        "book": "It holds responsibility and self-direction in the same frame.",
+        "video": "It shows how others navigated family obligations without abandoning their own path.",
+        "concept": "It separates duty from guilt so you can see the actual tradeoff.",
+    },
 }
 
 RESOURCES: dict[str, list[dict]] = {
@@ -281,6 +317,20 @@ RESOURCES: dict[str, list[dict]] = {
             "url": "https://www.verywellmind.com/what-is-attachment-theory-2795337",
             "why": "Explains why fear of rejection, withdrawal, and over-pursuing can feel so physically intense.",
         },
+        {
+            "type": "video",
+            "title": "Rethinking infidelity",
+            "author": "Esther Perel (TED)",
+            "url": "https://www.ted.com/talks/esther_perel_rethinking_infidelity_a_talk_for_anyone_who_has_ever_loved",
+            "why": "Reframes relationship crises as turning points rather than endpoints.",
+        },
+        {
+            "type": "concept",
+            "title": "Emotional Bid",
+            "author": "Gottman Institute",
+            "url": "https://www.gottman.com/blog/turn-toward-instead-of-away/",
+            "why": "Small moments of turning toward or away predict relationship outcomes better than grand gestures.",
+        },
     ],
     "health": [
         {
@@ -332,6 +382,13 @@ RESOURCES: dict[str, list[dict]] = {
             "url": "https://www.psychologytoday.com/us/therapy-types/acceptance-and-commitment-therapy",
             "why": "Helps people move with discomfort instead of waiting for perfect motivation before they act.",
         },
+        {
+            "type": "video",
+            "title": "What makes a good life?",
+            "author": "Robert Waldinger (TED)",
+            "url": "https://www.ted.com/talks/robert_waldinger_what_makes_a_good_life_lessons_from_the_longest_study_on_happiness",
+            "why": "75-year Harvard study on what actually predicts health and happiness.",
+        },
     ],
     "education": [
         {
@@ -382,6 +439,13 @@ RESOURCES: dict[str, list[dict]] = {
             "author": "Decision-Making Framework",
             "url": "https://www.investopedia.com/terms/o/opportunitycost.asp",
             "why": "Forces the decision out of abstract prestige and back into what your time, debt, and attention are replacing.",
+        },
+        {
+            "type": "video",
+            "title": "The first 20 hours",
+            "author": "Josh Kaufman (TEDx)",
+            "url": "https://www.ted.com/talks/josh_kaufman_the_first_20_hours_how_to_learn_anything",
+            "why": "Breaks the myth that mastering a new skill requires 10,000 hours.",
         },
     ],
     "financial": [
@@ -603,7 +667,8 @@ def _score_resource(
 
 def _build_personalized_why(resource: dict, bottleneck: str) -> str:
     base = resource.get("why", "").strip().rstrip(".")
-    suffix = BOTTLENECK_WHY_SUFFIX.get(bottleneck, "")
+    type_suffixes = BOTTLENECK_WHY_SUFFIX.get(bottleneck, {})
+    suffix = type_suffixes.get(resource.get("type", ""), "")
     if not base:
         return suffix or "It directly addresses the pressure sitting underneath this decision."
     if not suffix:

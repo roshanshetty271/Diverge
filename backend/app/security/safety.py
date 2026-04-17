@@ -37,11 +37,11 @@ _CRISIS_CATEGORIES = {
         r"\boverdose\s+on\b",
     ],
     "active_self_harm": [
-        r"\bcut\s+myself\b",
-        r"\bhurt\s+myself\b",
-        r"\bself[\s-]harm\b",
-        r"\bburning\s+myself\b",
-        r"\bstarving\s+myself\b",
+        r"\b(?:cut|cutting)\s+myself\b",
+        r"\b(?:hurt|hurting)\s+myself\b",
+        r"\bself[\s-]harm(?:ing)?\b",
+        r"\b(?:burn|burning)\s+myself\b",
+        r"\b(?:starve|starving)\s+myself\b",
     ],
     "immediate_danger": [
         r"\bgoing\s+to\s+hurt\b",

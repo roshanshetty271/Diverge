@@ -6,7 +6,7 @@ All API contracts defined here — single source of truth.
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ── Request schemas ──────────────────────────────────────────────
@@ -15,6 +15,14 @@ class DecisionInput(BaseModel):
     """User's decision input from the intake form."""
     path_a: str = Field(..., min_length=2, max_length=200, description="Option A")
     path_b: str = Field(..., min_length=2, max_length=200, description="Option B")
+
+    @field_validator("path_a", "path_b", mode="before")
+    @classmethod
+    def strip_whitespace_paths(cls, value: str) -> str:
+        """Strip leading/trailing whitespace so blank-looking input is rejected by min_length."""
+        if isinstance(value, str):
+            return value.strip()
+        return value
     template_id: Optional[str] = Field(None, max_length=50)
     user_name: Optional[str] = Field(None, max_length=50)
     age: Optional[int] = Field(None, ge=13, le=120)
