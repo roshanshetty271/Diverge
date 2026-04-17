@@ -98,6 +98,7 @@ export interface CheckpointedDebateResponse {
 export interface DecisionInput {
   path_a: string;
   path_b: string;
+  template_id?: string | null;
   user_name: string | null;
   age?: number | null;
   financial_context: string | null;
@@ -122,11 +123,12 @@ export interface Capabilities {
 
 export interface TemplateOption {
   id: string;
+  emoji?: string;
   title: string;
   question: string;
   pathA: string;
   pathB: string;
-  category: "financial" | "personal";
+  category: "career" | "startup" | "relationship" | "health" | "education" | "financial" | "general";
 }
 
 // ── UI types ────────────────────────────────────────────────────

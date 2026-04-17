@@ -13,7 +13,7 @@ interface Props {
   snapshotB: TimelineRow[];
 }
 
-const MILESTONES = ["Year 1", "Year 3", "Year 5", "Year 10", "Deathbed"];
+const DEFAULT_MILESTONES = ["Year 1", "Year 3", "Year 5", "Year 10", "Final Words"];
 
 const PATH_DRAW = {
   hidden: { pathLength: 0, opacity: 0 },
@@ -38,6 +38,9 @@ export default function ForkTimeline({ pathAName, pathBName, snapshotA, snapshot
   if (snapshotA.length < 2 && snapshotB.length < 2) return null;
 
   const maxRows = Math.max(snapshotA.length, snapshotB.length, 3);
+  const milestoneLabels = Array.from({ length: maxRows }, (_, i) =>
+    snapshotA[i]?.label || snapshotB[i]?.label || DEFAULT_MILESTONES[i] || `Year ${(i + 1) * 2}`,
+  );
 
   const textGap = 22;
 
@@ -148,7 +151,7 @@ export default function ForkTimeline({ pathAName, pathBName, snapshotA, snapshot
         {Array.from({ length: maxRows }).map((_, i) => {
           const y = firstNodeY + i * stepY;
           const delay = 0.8 + i * 0.3;
-          const milestone = MILESTONES[i] || `Year ${(i + 1) * 2}`;
+          const milestone = milestoneLabels[i];
           const snapA = snapshotA[i] || null;
           const snapB = snapshotB[i] || null;
           const keyA = `a-${i}`;

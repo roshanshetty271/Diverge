@@ -94,7 +94,7 @@ function stripMarkdown(text: string): string {
     .trim();
 }
 
-const TIMELINE_LABELS = ["Year 1", "Year 3", "Year 5", "Year 10", "Deathbed"];
+const TIMELINE_LABELS = ["Year 1", "Year 3", "Year 5", "Year 10", "Final Words", "Deathbed"];
 
 function parseLifeSnapshot(verdictText: string, pathName: string): { label: string; text: string }[] {
   const marker = `life snapshot - ${pathName}`.toLowerCase();
@@ -353,7 +353,16 @@ export default function Verdict() {
       .slice(0, 3);
   };
 
-  const sectionSeparators = ["thing you", "hidden assumption", "not seeing", "blind spot", "question you"];
+  const sectionSeparators = [
+    "what this decision is really about",
+    "thing you",
+    "hidden assumption",
+    "not seeing",
+    "blind spot",
+    "the bottleneck",
+    "question you",
+    "your next move",
+  ];
   const orderedWinSections = extractNamedSections(
     verdictText,
     /^\s*(?:\*\*)?Where\s+(.+?)\s+Wins:(?:\*\*)?\s*$/gim,
@@ -377,9 +386,17 @@ export default function Verdict() {
       sectionSeparators,
     ) || orderedWinSections[1]?.body || "",
   ).map(stripMarkdown);
-  const blindSpot = stripMarkdown(
-    parseSection(verdictText, ["not seeing", "might not be seeing", "hidden assumption", "blind spot", "thing you're missing"], ["question you", "overall"]),
-  ) || timelineVerdict;
+  const decisionCore = stripMarkdown(
+    parseSection(
+      verdictText,
+      ["what this decision is really about", "not seeing", "might not be seeing", "hidden assumption", "blind spot", "thing you're missing"],
+      ["the bottleneck", "question you", "overall", "your next move"],
+    ),
+  );
+  const bottleneck = stripMarkdown(
+    parseSection(verdictText, ["the bottleneck", "bottleneck"], ["your next move", "overall"]),
+  );
+  const blindSpot = [decisionCore, bottleneck].filter(Boolean).join(" ").trim() || timelineVerdict;
   const nextMove = stripMarkdown(parseSection(verdictText, ["your next move", "next move"], ["life snapshot", "\n\n**life"]));
   const snapshotA = parseLifeSnapshot(verdictText, pathAName).length > 0
     ? parseLifeSnapshot(verdictText, pathAName)

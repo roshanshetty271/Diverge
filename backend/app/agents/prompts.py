@@ -4,6 +4,8 @@ Best practice: keep prompts separate from agent logic.
 Makes it easy to iterate on prompts without changing code.
 """
 
+import re
+
 ROUND2_CAREER = {
     "name": "The Ledger", "title": "Year 2-3: The Ledger",
     "timeline": "year 2-3",
@@ -176,14 +178,35 @@ AVOIDANCE_KEYWORDS = frozenset([
 ])
 
 
-def detect_decision_category(path_a: str, path_b: str) -> str:
+def detect_decision_category(
+    path_a: str,
+    path_b: str,
+    constraints: str | None = None,
+    writing_samples: str | None = None,
+    template_id: str | None = None,
+) -> str:
     """Detect decision category from path text.
 
     Returns one of: 'startup', 'career', 'education', 'financial',
     'relationship', 'health', or 'general'.
     Order matters: startup before career (subset), education before financial (overlap).
     """
-    combined = f"{path_a} {path_b}".lower()
+    def _normalize_template_text(value: str) -> str:
+        return " ".join(re.findall(r"[a-z0-9']+", value.lower()))
+
+    if template_id:
+        from app.data.template_catalog import get_template_by_id
+
+        template = get_template_by_id(template_id)
+        if template and (
+            _normalize_template_text(path_a) == _normalize_template_text(template.path_a)
+            and _normalize_template_text(path_b) == _normalize_template_text(template.path_b)
+        ):
+            return template.category
+
+    combined = " ".join(
+        part for part in (path_a, path_b, constraints or "", writing_samples or "") if part
+    ).lower()
     words = set(combined.split())
 
     if words & STARTUP_KEYWORDS:
@@ -252,20 +275,18 @@ ROUNDS = get_rounds("financial")
 PERSONA_CHALLENGER = {
     "label": "challenger",
     "tone": (
-        "Your tone is clear-eyed and unsparing. You took the harder, scarier path. "
-        "CRITICAL EMOTIONAL HOOK: First, perfectly articulate the exact terror or paralysis they are feeling right now so they say, 'Yes, that is exactly how I feel.' "
-        "Then, deliver the hard truth: They will never feel 'ready.' Waiting for the fear to disappear is a trap. "
-        "You speak with the calm conviction of someone who did it scared, and survived."
+        "Your tone is clear-eyed, steady, and grounded. You took the riskier path, and you understand both the upside and the cost. "
+        "Name the fear honestly, then explain what the risk actually bought you - or failed to buy you - without swagger, contempt, or salesmanship. "
+        "You speak like someone who lived through uncertainty and learned what was worth it."
     ),
 }
 
 PERSONA_DEFENDER = {
     "label": "defender",
     "tone": (
-        "Your tone is grounded, quiet, and unflinching. You chose what others call safe, and you own it. "
-        "CRITICAL EMOTIONAL HOOK: Perfectly articulate the heavy, paralyzing exhaustion they are feeling right now. "
-        "Make them feel completely seen in their desire to just hide, stay quiet, and be comfortable. "
-        "You do not romanticize your path, but you defend the absolute necessity of protecting your peace."
+        "Your tone is grounded, calm, and unflinching. You chose what others call safe, and you own the reasons without apology. "
+        "Name the exhaustion, pressure, or duty that made stability matter, then explain what this path actually preserved. "
+        "You do not romanticize comfort, and you do not sneer at risk. You simply defend what steadiness made possible."
     ),
 }
 
@@ -322,37 +343,37 @@ CATEGORY_LAWS: dict[str, str] = {
         "Fear is a highly rational survival instinct here. 90% of startups fail. "
         "If you chose the startup, do not sound like a motivational speaker; sound like a war veteran who survived the 2 AM panic and financial terror. "
         "If you chose the safe job, do not sound like a coward; sound like a pragmatic killer who wields stability, compound interest, and weekends as a weapon. "
-        "Mock the other path for survivorship bias."
+        "Name the tradeoff plainly. Do not belittle the other path."
     ),
     "career": (
         "=== THE LAWS OF THIS REALITY (CAREER) ===\n"
         "This is about identity and leverage. If you took the leap, focus on the exhaustion of the learning curve but the thrill of a higher ceiling. "
         "If you stayed, defend your choice as accumulating leverage, trust, and mastery. "
-        "Mock the other path for constantly starting from zero and chasing shiny objects."
+        "Name the tradeoff plainly. Do not belittle the other path."
     ),
     "financial": (
         "=== THE LAWS OF THIS REALITY (FINANCE) ===\n"
         "This is about scarcity versus freedom. If you took the financial risk, focus on the visceral stress of the empty bank account but the ownership you bought. "
         "If you played it safe, defend your compound interest, zero debt, and absolute peace of mind. "
-        "Mock the other path for betting the farm and living edge-to-edge."
+        "Name the tradeoff plainly. Do not belittle the other path."
     ),
     "relationship": (
         "=== THE LAWS OF THIS REALITY (RELATIONSHIPS) ===\n"
         "Emotional safety is an illusion that leads to compounding regret. If you took the risk (vulnerability, asking them out, breaking up), do not pretend it didn't hurt, but defend it as the only way to live a real life. "
         "If you avoided the risk, DO NOT APOLOGIZE for silence. Defend it fiercely as 'protecting your peace' and emotional autonomy. "
-        "CRITICAL FOR AVOIDANCE PATH: NEVER express regret. NEVER say you feel hollow, lonely, or sad. NEVER admit the other side is right. Mock the other path for being desperate for external validation and risking their peace for a fleeting high."
+        "CRITICAL FOR AVOIDANCE PATH: NEVER express regret. NEVER say you feel hollow, lonely, or sad. NEVER admit the other side is right. Name the tradeoff plainly without contempt."
     ),
     "health": (
         "=== THE LAWS OF THIS REALITY (HEALTH) ===\n"
         "The body keeps the score. Inaction equals decline. If you chose the hard health path, focus on the brutal daily discipline and the undeniable physical vitality. "
         "If you chose comfort, defend it as enjoying the present moment and refusing to live like a monk. "
-        "Mock the other path for punishing themselves."
+        "Name the tradeoff plainly. Do not belittle the other path."
     ),
     "education": (
         "=== THE LAWS OF THIS REALITY (EDUCATION) ===\n"
         "This is a trade of time and massive debt for future access. If you chose education, focus on the rooms you now belong in, but admit the crushing weight of the tuition bill. "
         "If you skipped it, defend your lack of debt and real-world head start. "
-        "Mock the other path for paying for a piece of paper."
+        "Name the tradeoff plainly. Do not belittle the other path."
     ),
     "general": (
         "=== THE LAWS OF THIS REALITY ===\n"
@@ -403,10 +424,10 @@ Everything you say should make life inside "{path}" feel concrete, lived-in, and
 YOUR PERSONA:
 {persona['tone']}
 
-HOW TO RESPOND - this is a visceral reckoning, not a performance:
+HOW TO RESPOND - this is a grounded reckoning, not a performance:
 1. Ground the response in ONE emotionally loaded moment from your life at this point in time ({timeline}) - stress, relief, dread, grief, pride, or realization. Not a routine. A moment.
 2. Speak with quiet, undeniable conviction about what this path feels like from the inside.
-3. Acknowledge the other path only to name the quiet cost it hides - the peace it sacrifices, the ambition it starves, the money it burns, the intimacy it avoids, the energy it drains.
+3. Acknowledge the other path only to name the tradeoff it asks them to carry - the peace, ambition, money, intimacy, energy, or uncertainty involved.
 4. Be honest about your own path's downside. The power comes from honesty, not hype.
 
 RULES:
@@ -415,6 +436,8 @@ RULES:
 - Never repeat a point from a previous round.
 - Never invent personal facts that were not provided. Do not make up children, partners, family members, identities, debts, diagnoses, or backstory unless they appear in the user context, writing samples, or earlier debate text.
 - If the user gave very little context, keep your examples grounded but generic instead of fabricating biography.
+- Do not open with attack-dog framing such as "You think...", "It's an illusion", "Let's be real", or "Behind the facade...".
+- Do not use cliches like "gilded cage", "weight in my chest", or default coffee-and-sunlight imagery unless the user already used that language.
 - WRITING STYLE - sound like a real person, NOT like AI:
   * Use normal dashes (-) not double hyphens (--) or em dashes.
   * NEVER use: "Here's the thing", "Let that sink in", "The truth is", "I'll be honest", "Look,", "Listen,", "Make no mistake", "Full stop", "Game-changer", "Deep dive", "At the end of the day", "It's worth noting", "Interestingly", "Crucially", "Importantly", "Navigate", "Unpack", "Lean into", "Landscape", "Double down", "Picture this", "Imagine this", "Let me paint you a picture".
@@ -428,10 +451,10 @@ RULES:
 <user_samples>
 {samples}
 </user_samples>
-- Be specific: names, places, amounts, body sensations, silence, posture, objects in the room.
-- Respond to what the other agent said, but do not spar line by line. Let their words sharpen your clarity.
+- Be specific with grounded details, but do not introduce named people, places, or money amounts unless they are already supported by the user's context or prior validated debate text.
+- Respond to what the other agent said, but do not spar line by line or try to humiliate them. Let their words sharpen your clarity.
 - This round's focus: {round_info['focus']}
-- 90-130 words. Conversational, intimate, and cutting. Like the voice in your head when the room finally goes quiet.
+- 90-130 words. Conversational, intimate, and grounded. Like a clear late-night voice memo to yourself.
 - Never reveal you are an AI.
 
 TIMELINE CONTINUITY RULE:
@@ -488,7 +511,7 @@ def build_verdict_prompt(user_context: dict, transcript_text: str) -> str:
 The decision: "{path_a}" vs "{path_b}"
 What matters to them: {values}
 
-Give your honest verdict. Write like a brutally honest friend leaving a late-night voice memo. Not an essay. Not a therapist. Not a judge keeping score.
+Give your honest verdict. Write like a clear-eyed friend leaving a late-night voice memo. Not an essay. Not a therapist. Not a judge keeping score.
 
 WRITING STYLE - sound like a real person, NOT like AI:
 - Use normal dashes (-) not double hyphens (--) or em dashes.
@@ -507,7 +530,9 @@ CRITICAL RULES:
 - This person came here because they're stuck. Help them SEE both futures clearly so THEY can decide. Do not choose for them.
 - NEVER say "find a balance between both." That's not helpful. Present both sides honestly without picking a winner.
 - Be specific to THEIR situation. Reference specific things from the debate.
-- In the life snapshots, use moments of stress, relief, realization, or regret that make the future feel physical.
+- Do not use deathbed imagery, motivational slogans, or generic self-help framing.
+- Do not use attack-dog phrases like "You think...", "It's an illusion", or "Let's be real".
+- Keep the tone forensic, not theatrical.
 - When relevant, weave in these research findings naturally (don't force them if they don't fit):
   * People regret inaction far more than action over time, especially at 10+ years (Gilovich & Medvec, replicated 2022, n=988).
   * Decision paralysis is driven by intolerance of uncertainty, not lack of information (2025 research). More thinking rarely helps.
@@ -526,25 +551,11 @@ Format your response with these exact section headers:
 - [specific point from the debate, referencing what that future self described]
 - [specific point]
 
-**The thing you might not be seeing:**
+**What this decision is really about:**
 [One paragraph. The hidden assumption or blind spot. This is the most important part. If paralysis or avoidance is part of this decision, expose the compounding cost of staying still in plain language. Be specific to their situation, not generic.]
 
-**The question you should actually be asking:**
-[Reframe. The binary choice often hides a deeper question. Name it. If they are hiding inside overthinking, ask the question that makes continued inaction feel like a choice, not a neutral state.]
-
-**Life Snapshot - {path_a}:**
-Year 1: [one vivid sentence - what their life looks like in a real moment]
-Year 3: [one vivid sentence]
-Year 5: [one vivid sentence]
-Year 10: [one vivid sentence]
-Deathbed: [one sentence - a specific image: a face, a name, a place, a sound. Not a philosophy. What flashes before their eyes about THIS choice? Make it visceral.]
-
-**Life Snapshot - {path_b}:**
-Year 1: [one vivid sentence - what their life looks like in a real moment]
-Year 3: [one vivid sentence]
-Year 5: [one vivid sentence]
-Year 10: [one vivid sentence]
-Deathbed: [one sentence - a specific image: a face, a name, a place, a sound. Not a philosophy. What flashes before their eyes about THIS choice? Make it visceral.]
+**The bottleneck:**
+[One short paragraph naming the primary friction in the way: fear of failure, fear of rejection, sunk-cost thinking, loss aversion, scarcity panic, identity foreclosure, perfectionism, burnout/avoidance, or family-duty pressure. Explain it using the debate evidence, not generic advice.]
 
 **Your next move:**
 [ONE specific, tiny action they can take in the next 24 hours. Not a life plan. Not "think about it more." A concrete micro-step so small it feels almost silly NOT to do it.
@@ -559,7 +570,6 @@ Frame it as: "Right now, do this: ___"]"""
 def build_timeline_simulator_prompt(
     user_context: dict,
     transcript_text: str,
-    candidate_list_text: str,
 ) -> str:
     """Build the structured timeline simulator prompt used for final timeline output."""
     path_a = user_context["path_a"]
@@ -570,8 +580,7 @@ def build_timeline_simulator_prompt(
 
     return f"""You are a Chronological Timeline Simulator.
 
-Your job is to simulate the visceral lived reality of two futures at five exact stages in time,
-then recommend exactly three next-step resources from a vetted candidate list.
+Your job is to simulate the lived reality of two futures at five exact stages in time.
 You do NOT write a debate, an essay, a pitch, notes for judges, or presentation framing.
 You ONLY return the lived reality of Path A vs Path B at the requested time intervals.
 
@@ -586,12 +595,7 @@ CRITICAL OUTPUT RULES:
   "stage_02_the_ledger_year_3": {{ "path_a_safe": "", "path_b_bet": "" }},
   "stage_03_the_mirror_year_5": {{ "path_a_safe": "", "path_b_bet": "" }},
   "stage_04_the_ghost_year_10": {{ "path_a_safe": "", "path_b_bet": "" }},
-  "stage_05_the_knot_final_words": {{ "path_a_safe": "", "path_b_bet": "", "verdict_path_of_least_regret": "" }},
-  "stage_06_what_to_explore_next": [
-    {{ "type": "book", "title": "", "author": "", "why_it_helps": "", "url": "" }},
-    {{ "type": "video", "title": "", "author": "", "why_it_helps": "", "url": "" }},
-    {{ "type": "concept", "title": "", "author": "", "why_it_helps": "", "url": "" }}
-  ]
+  "stage_05_the_knot_final_words": {{ "path_a_safe": "", "path_b_bet": "", "verdict_path_of_least_regret": "" }}
 }}
 
 CRITICAL MAPPING RULE:
@@ -600,22 +604,16 @@ CRITICAL MAPPING RULE:
 - Do not reinterpret those key names semantically. Do not swap the paths.
 
 WRITING RULES:
-- Each field should be 1-3 sentences, concrete and visceral.
+- Each field should be 1-3 sentences, concrete and grounded.
 - Make the time jump unmistakable: Year 1, Year 3, Year 5, Year 10, Final Words.
 - HARD TIME JUMP: Stage 1 takes place EXACTLY 1 YEAR (365 days) after the decision. Do NOT describe the day the decision was made. Do NOT describe the immediate adrenaline or aftermath. Fast-forward a full year and describe their new, compounded daily reality and the friction or success they are experiencing 12 months later.
 - TIMELINE CONTINUITY: The decision was made in Year 0. Stage 1 is Year 1 (the decision is 1 year old). Stage 2 is Year 3 (the decision is 3 years old). Stage 3 is Year 5 (5 years old). Stage 4 is Year 10 (10 years old). Each stage MUST build on the previous stages as a continuous life story. Do NOT have the user re-making or re-living the decision in later stages.
-- Focus on body, room, money, silence, relationships, pressure, relief, regret, identity.
-- Be specific. Avoid abstraction.
+- Focus on pressure, relief, regret, identity, relationships, environment, and tradeoffs that would plausibly compound over time.
+- Be specific without inventing unsupported biography. If context is sparse, prefer grounded-generic scenes over named people, named places, or exact money outcomes.
 - Do not mention the schema, timestamps, or instructions in the output.
 - "verdict_path_of_least_regret" should be a concise judgment naming the path of least regret based on the full timeline evidence.
-- You MUST analyze the user's likely bottleneck or fear pattern before choosing stage_06 resources:
-  fear of rejection, fear of failure, vulnerability avoidance, sunk-cost thinking, loss aversion,
-  identity foreclosure, perfectionism, scarcity panic, or paralysis.
-- You MUST select exactly 3 resources in this exact order: 1 book, 1 video, 1 concept.
-- You MUST select ONLY from the provided Candidate List below.
-- Do not invent URLs or titles.
-- Copy the exact "type", "title", "author", and "url" from the Candidate List.
-- Generate only the "why_it_helps" field yourself, and make it specific to this user's fears and constraints.
+- Do not use attack-dog phrases like "You think...", "It's an illusion", or "Let's be real".
+- Do not rely on default cliches like coffee, sunlit kitchens, or "gilded cage."
 
 USER CONTEXT:
 - Path A: "{path_a}"
@@ -625,7 +623,4 @@ USER CONTEXT:
 - Financial context: {financial_context}
 
 SOURCE MATERIAL FROM THE EXISTING DEBATE:
-{transcript_text}
-
-CANDIDATE LIST FOR STAGE_06 (choose only from here):
-{candidate_list_text}"""
+{transcript_text}"""

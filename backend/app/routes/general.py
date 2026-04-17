@@ -1,22 +1,23 @@
 """Templates, Journal, Save, Share, Outcome Tracking, and Health routes."""
 
 import logging
-import uuid
 import time
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.config import get_settings
+from app.data.template_catalog import get_template_catalog
 from app.db.dynamodb import (
     get_shared_debate,
     get_user_debates,
     save_debate,
+    save_debate_feedback,
     save_shared_debate,
-    upsert_user_profile,
     update_debate_outcome,
     update_debate_reflection,
-    save_debate_feedback,
+    upsert_user_profile,
 )
 from app.schemas import (
     CapabilitiesResponse,
@@ -36,22 +37,13 @@ router = APIRouter(prefix="/api", tags=["general"])
 _capability_probe_cache: dict[str, tuple[float, bool]] = {}
 _CAPABILITY_CACHE_TTL = 300
 
-TEMPLATES = [
-    TemplateResponse(id="career", emoji="💼", title="Career Change", question="Should I stay or take the new offer?", pathA="Stay at my current job", pathB="Take the new opportunity"),
-    TemplateResponse(id="city", emoji="🏙️", title="New City", question="Should I move or stay put?", pathA="Stay in my current city", pathB="Move somewhere new"),
-    TemplateResponse(id="startup", emoji="🚀", title="Start Something", question="Should I go for it or play it safe?", pathA="Stay employed", pathB="Start my own thing"),
-    TemplateResponse(id="education", emoji="🎓", title="Education", question="Should I study or keep working?", pathA="Keep working", pathB="Go back to school"),
-    TemplateResponse(id="relationship", emoji="❤️", title="Relationship", question="Should I say something or let it go?", pathA="Say what I feel", pathB="Keep it to myself"),
-    TemplateResponse(id="lifestyle", emoji="🌿", title="Lifestyle Change", question="Should I make the change or stay comfortable?", pathA="Commit to the change", pathB="Keep things as they are"),
-]
-
 
 @router.get("/templates", response_model=list[TemplateResponse])
 def get_templates(request: Request):
     """Return decision templates for the template picker."""
     check_rate_limit(request, max_requests=60, window_seconds=300, endpoint="templates:burst")
     check_rate_limit(request, max_requests=500, window_seconds=3600, endpoint="templates")
-    return TEMPLATES
+    return [TemplateResponse(**template.to_api_dict()) for template in get_template_catalog()]
 
 
 def _service_check(service_name: str, settings, call: str | None = None) -> bool:

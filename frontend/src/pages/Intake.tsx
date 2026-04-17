@@ -5,8 +5,8 @@ import ValuesChips from "../components/ValuesChips";
 import WritingSampleInput from "../components/WritingSampleInput";
 import { useToast } from "../components/Toast";
 import { useDivergeAuth } from "../hooks/useAuth";
+import { useTemplateCatalog } from "../hooks/useTemplateCatalog";
 import { sanitizeInput, sanitizeFinancialInput, validateDecisionInput } from "../utils/security";
-import { TEMPLATES } from "../utils/constants";
 import { getTurnstileToken } from "../utils/turnstile";
 import VoiceButton from "../components/VoiceButton";
 import type { DecisionInput } from "../types";
@@ -20,9 +20,30 @@ const FINANCIAL_KEYWORDS = new Set([
   "rent", "retire", "income", "save", "invest",
 ]);
 
-function isFinancialDecision(pathA: string, pathB: string, templateId?: string): boolean {
-  const template = TEMPLATES.find((t) => t.id === templateId);
-  if (template) return template.category === "financial";
+function isFinancialTemplateCategory(category?: string): boolean {
+  return category === "career" || category === "startup" || category === "education" || category === "financial";
+}
+
+function normalizeTemplateText(value: string): string {
+  return (value.toLowerCase().match(/[a-z0-9']+/g) || []).join(" ");
+}
+
+function templateMatchesCurrentPaths(
+  template: { pathA: string; pathB: string } | undefined,
+  pathA: string,
+  pathB: string,
+): boolean {
+  if (!template) return false;
+  return (
+    normalizeTemplateText(pathA) === normalizeTemplateText(template.pathA) &&
+    normalizeTemplateText(pathB) === normalizeTemplateText(template.pathB)
+  );
+}
+
+function shouldShowMoneyStep(pathA: string, pathB: string, templateCategory?: string): boolean {
+  if (templateCategory) {
+    return isFinancialTemplateCategory(templateCategory);
+  }
   const words = `${pathA} ${pathB}`.toLowerCase().split(/\s+/);
   return words.some((w) => FINANCIAL_KEYWORDS.has(w));
 }
@@ -31,6 +52,7 @@ export default function Intake() {
   const location = useLocation();
   const navigate = useNavigate();
   const initial = (location.state || {}) as { pathA?: string; pathB?: string; templateId?: string };
+  const { templates } = useTemplateCatalog();
 
   const { toast } = useToast();
   const { isAuthenticated } = useDivergeAuth();
@@ -47,7 +69,9 @@ export default function Intake() {
   const [writingSample, setWritingSample] = useState("");
   const [startingDebate, setStartingDebate] = useState(false);
 
-  const showMoney = isFinancialDecision(pathA, pathB, initial.templateId);
+  const selectedTemplate = templates.find((template) => template.id === initial.templateId);
+  const usingTemplateDefaults = templateMatchesCurrentPaths(selectedTemplate, pathA, pathB);
+  const showMoney = shouldShowMoneyStep(pathA, pathB, usingTemplateDefaults ? selectedTemplate?.category : undefined);
 
   const totalSteps = showMoney ? 4 : 3;
   const displayStep = () => {
@@ -64,6 +88,7 @@ export default function Intake() {
     const payload: DecisionInput = {
       path_a: sanitizeInput(pathA),
       path_b: sanitizeInput(pathB),
+      template_id: initial.templateId && initial.templateId !== "custom" && usingTemplateDefaults ? initial.templateId : null,
       user_name: userName.trim() || null,
       age: userAge ? parseInt(userAge, 10) : null,
       financial_context: salary || salaryNew || savings

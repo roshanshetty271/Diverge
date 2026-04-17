@@ -6,8 +6,8 @@ the model can personalize recommendations without inventing links.
 
 from __future__ import annotations
 
-import hashlib
 import re
+from collections import defaultdict
 
 from app.agents.prompts import (
     CAREER_KEYWORDS,
@@ -37,6 +37,95 @@ CATEGORY_PHRASES: dict[str, tuple[str, ...]] = {
     "education": ("go back to school", "go to grad school", "take on tuition"),
     "financial": ("move cities", "relocate", "take the pay cut", "invest the money"),
     "health": ("get in shape", "get sober", "start therapy", "fix my sleep"),
+}
+
+BOTTLENECK_TAXONOMY = (
+    "fear_of_failure",
+    "fear_of_rejection",
+    "sunk_cost",
+    "loss_aversion",
+    "scarcity_panic",
+    "identity_foreclosure",
+    "perfectionism",
+    "burnout_avoidance",
+    "family_duty_pressure",
+)
+
+BOTTLENECK_PATTERNS: dict[str, tuple[str, ...]] = {
+    "fear_of_failure": ("fail", "failure", "wrong decision", "mess up", "flop", "risk", "what if it doesn't work"),
+    "fear_of_rejection": ("rejection", "rejected", "embarrassed", "confess", "ask out", "tell them", "vulnerable"),
+    "sunk_cost": ("already spent", "already invested", "too much time", "can't waste", "sunk cost", "all these years"),
+    "loss_aversion": ("lose", "losing", "give up", "leave behind", "comfort", "what i have", "what i built"),
+    "scarcity_panic": ("student loans", "debt", "rent", "paycheck", "no safety net", "savings", "bills"),
+    "identity_foreclosure": ("who i am", "identity", "first-gen", "prestige", "title", "beginner again", "career path"),
+    "perfectionism": ("ready", "certainty", "perfect", "more time", "need a plan", "not sure enough"),
+    "burnout_avoidance": ("burned out", "burnt out", "exhausted", "tired", "overwhelmed", "no energy"),
+    "family_duty_pressure": (
+        "mom",
+        "dad",
+        "parents",
+        "kids",
+        "children",
+        "caregiver",
+        "only nearby",
+        "depends on me",
+        "depend on me",
+        "family depends",
+        "send money home",
+        "take care of them",
+        "feel guilty",
+    ),
+}
+
+DEFAULT_BOTTLENECK_BY_CATEGORY = {
+    "startup": "fear_of_failure",
+    "career": "identity_foreclosure",
+    "financial": "loss_aversion",
+    "education": "scarcity_panic",
+    "relationship": "fear_of_rejection",
+    "health": "burnout_avoidance",
+    "general": "perfectionism",
+}
+
+RESOURCE_BOTTLENECK_TAGS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("book", "Designing Your Life"): ("fear_of_failure", "identity_foreclosure", "sunk_cost"),
+    ("video", "How to find work you love"): ("fear_of_failure", "identity_foreclosure"),
+    ("concept", "Sunk-Cost Fallacy"): ("sunk_cost", "loss_aversion"),
+    ("book", "Working Identity"): ("identity_foreclosure", "fear_of_failure"),
+    ("concept", "Career Capital"): ("identity_foreclosure", "loss_aversion"),
+    ("book", "The Lean Startup"): ("fear_of_failure", "scarcity_panic"),
+    ("video", "The single biggest reason why startups succeed"): ("fear_of_failure", "scarcity_panic"),
+    ("book", "The Mom Test"): ("fear_of_failure", "perfectionism"),
+    ("concept", "Survivorship Bias"): ("fear_of_failure", "loss_aversion"),
+    ("book", "Attached"): ("fear_of_rejection", "family_duty_pressure"),
+    ("video", "The power of vulnerability"): ("fear_of_rejection", "perfectionism"),
+    ("concept", "Attachment Theory"): ("fear_of_rejection", "family_duty_pressure"),
+    ("book", "Atomic Habits"): ("burnout_avoidance", "perfectionism"),
+    ("book", "Tiny Habits"): ("burnout_avoidance", "perfectionism"),
+    ("concept", "Acceptance and Commitment Therapy"): ("burnout_avoidance", "perfectionism"),
+    ("book", "Range"): ("identity_foreclosure", "fear_of_failure"),
+    ("book", "Mindset"): ("fear_of_failure", "perfectionism"),
+    ("article", "ROI of Education by Field"): ("scarcity_panic", "loss_aversion"),
+    ("concept", "Opportunity Cost"): ("scarcity_panic", "loss_aversion"),
+    ("book", "The Psychology of Money"): ("scarcity_panic", "loss_aversion", "family_duty_pressure"),
+    ("book", "Your Money or Your Life"): ("scarcity_panic", "loss_aversion", "family_duty_pressure"),
+    ("video", "How to buy happiness"): ("loss_aversion", "scarcity_panic"),
+    ("concept", "Loss Aversion"): ("loss_aversion", "scarcity_panic"),
+    ("book", "Thinking, Fast and Slow"): ("perfectionism", "loss_aversion"),
+    ("video", "The paradox of choice"): ("perfectionism", "identity_foreclosure"),
+    ("concept", "Sunk-Cost Fallacy"): ("sunk_cost", "loss_aversion"),
+}
+
+BOTTLENECK_WHY_SUFFIX = {
+    "fear_of_failure": "It helps separate real downside from imagined catastrophe.",
+    "fear_of_rejection": "It helps make emotional risk feel legible instead of overwhelming.",
+    "sunk_cost": "It helps cut through loyalty to past effort and return to the present choice.",
+    "loss_aversion": "It helps slow down the instinct to protect what is familiar at any cost.",
+    "scarcity_panic": "It helps turn money fear into a clearer tradeoff instead of a fog of dread.",
+    "identity_foreclosure": "It helps loosen the story that one decision has to define who you are forever.",
+    "perfectionism": "It helps replace waiting for certainty with a smaller, testable next move.",
+    "burnout_avoidance": "It helps make change feel sustainable instead of like another impossible demand.",
+    "family_duty_pressure": "It helps hold responsibility and self-direction in the same frame.",
 }
 
 RESOURCES: dict[str, list[dict]] = {
@@ -409,6 +498,25 @@ def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9']+", text.lower()))
 
 
+def _phrase_matches(text: str, phrase: str) -> bool:
+    tokens = re.findall(r"[a-z0-9']+", phrase.lower())
+    if not tokens:
+        return False
+
+    pattern = r"\b" + r"\s+".join(re.escape(token) for token in tokens) + r"\b"
+    return re.search(pattern, text) is not None
+
+
+def _phrase_is_negated(text: str, phrase: str) -> bool:
+    tokens = re.findall(r"[a-z0-9']+", phrase.lower())
+    if not tokens:
+        return False
+
+    phrase_pattern = r"\b" + r"\s+".join(re.escape(token) for token in tokens) + r"\b"
+    negation_pattern = r"(?:\bno\b|\bnot\b|\bnever\b|\bnobody\b|\bno one\b|\bwithout\b)[^.!?\n]{0,30}" + phrase_pattern
+    return re.search(negation_pattern, text) is not None
+
+
 def _score_categories(path_a: str, path_b: str, constraints: str | None = None) -> list[tuple[str, int]]:
     combined = " ".join(part for part in (path_a, path_b, constraints or "") if part).lower()
     words = _tokenize(combined)
@@ -419,7 +527,7 @@ def _score_categories(path_a: str, path_b: str, constraints: str | None = None) 
             continue
         score = len(words & CATEGORY_KEYWORDS[category])
         for phrase in CATEGORY_PHRASES.get(category, ()):
-            if phrase in combined:
+            if _phrase_matches(combined, phrase):
                 score += 2
         if score > 0:
             scores.append((category, score))
@@ -443,6 +551,118 @@ def _copy_resource(resource: dict, category: str) -> dict:
     copied = dict(resource)
     copied["category"] = category
     return copied
+
+
+def detect_primary_bottleneck(
+    path_a: str,
+    path_b: str,
+    constraints: str | None = None,
+    writing_samples: str | None = None,
+    decision_category: str | None = None,
+) -> str:
+    """Infer the user's dominant bottleneck from the intake context."""
+    combined = " ".join(part for part in (path_a, path_b, constraints or "", writing_samples or "") if part).lower()
+    scores = defaultdict(int)
+
+    for bottleneck, phrases in BOTTLENECK_PATTERNS.items():
+        for phrase in phrases:
+            if _phrase_matches(combined, phrase) and not _phrase_is_negated(combined, phrase):
+                scores[bottleneck] += 1
+
+    if scores:
+        return max(BOTTLENECK_TAXONOMY, key=lambda key: (scores[key], -BOTTLENECK_TAXONOMY.index(key)))
+
+    category = (decision_category or select_relevant_categories(path_a, path_b, constraints)[:1] or ["general"])[0]
+    return DEFAULT_BOTTLENECK_BY_CATEGORY.get(category, "perfectionism")
+
+
+def _score_resource(
+    resource: dict,
+    *,
+    primary_category: str,
+    secondary_categories: list[str],
+    bottleneck: str,
+) -> int:
+    score = 0
+    resource_category = resource.get("category", "general")
+    if resource_category == primary_category:
+        score += 5
+    elif resource_category in secondary_categories:
+        score += 3
+    elif resource_category == "general":
+        score += 1
+
+    tags = RESOURCE_BOTTLENECK_TAGS.get((resource["type"], resource["title"]), ())
+    if bottleneck in tags:
+        score += 5
+    elif tags:
+        score += 1
+
+    return score
+
+
+def _build_personalized_why(resource: dict, bottleneck: str) -> str:
+    base = resource.get("why", "").strip().rstrip(".")
+    suffix = BOTTLENECK_WHY_SUFFIX.get(bottleneck, "")
+    if not base:
+        return suffix or "It directly addresses the pressure sitting underneath this decision."
+    if not suffix:
+        return f"{base}."
+    return f"{base}. {suffix}"
+
+
+def select_deterministic_resources(
+    path_a: str,
+    path_b: str,
+    constraints: str | None = None,
+    *,
+    writing_samples: str | None = None,
+    max_items: int = 3,
+    decision_category: str | None = None,
+) -> tuple[list[dict], str]:
+    """Pick one vetted book, video, and concept using category + bottleneck scoring."""
+    selected_categories = select_relevant_categories(path_a, path_b, constraints)
+    primary_category = (decision_category or (selected_categories[0] if selected_categories else "general")).lower()
+    secondary_categories = [category for category in selected_categories if category != primary_category]
+    bottleneck = detect_primary_bottleneck(
+        path_a,
+        path_b,
+        constraints,
+        writing_samples=writing_samples,
+        decision_category=primary_category,
+    )
+
+    candidates = shortlist_resource_candidates(
+        path_a,
+        path_b,
+        constraints,
+        max_candidates=24,
+        decision_category=primary_category,
+    )
+
+    picks: list[dict] = []
+    for resource_type in ELIGIBLE_TIMELINE_TYPES:
+        typed_candidates = [resource for resource in candidates if resource["type"] == resource_type]
+        if not typed_candidates:
+            continue
+        ranked = sorted(
+            typed_candidates,
+            key=lambda resource: (
+                -_score_resource(
+                    resource,
+                    primary_category=primary_category,
+                    secondary_categories=secondary_categories,
+                    bottleneck=bottleneck,
+                ),
+                resource["title"],
+            ),
+        )
+        chosen = dict(ranked[0])
+        chosen.pop("category", None)
+        chosen["why"] = _build_personalized_why(chosen, bottleneck)
+        picks.append(chosen)
+
+    return picks[:max_items], bottleneck
 
 
 def _iter_timeline_eligible(category: str) -> list[dict]:
@@ -514,32 +734,45 @@ def get_rotating_fallback_resources(
     constraints: str | None = None,
     max_items: int = 3,
     decision_category: str | None = None,
+    writing_samples: str | None = None,
 ) -> list[dict]:
     """Return a diverse deterministic fallback recommendation trio."""
-    shortlist = shortlist_resource_candidates(path_a, path_b, constraints, max_candidates=12, decision_category=decision_category)
-    
-    if decision_category:
-        selected_categories = {decision_category.lower()}
-    else:
-        selected_categories = set(select_relevant_categories(path_a, path_b, constraints))
-        
-    grouped: dict[str, list[dict]] = {resource_type: [] for resource_type in ELIGIBLE_TIMELINE_TYPES}
-    for resource in shortlist:
-        grouped.setdefault(resource["type"], []).append(resource)
+    picks, _ = select_deterministic_resources(
+        path_a,
+        path_b,
+        constraints,
+        writing_samples=writing_samples,
+        max_items=max_items,
+        decision_category=decision_category,
+    )
+    return picks
 
-    digest = hashlib.sha256(
-        f"{path_a}|{path_b}|{constraints or ''}".encode("utf-8")
-    ).digest()
 
-    picks: list[dict] = []
-    for index, resource_type in enumerate(ELIGIBLE_TIMELINE_TYPES):
-        options = grouped.get(resource_type, [])
-        if not options:
-            continue
-        preferred = [resource for resource in options if resource.get("category") in selected_categories]
-        candidate_pool = preferred or options
-        chosen = dict(candidate_pool[digest[index] % len(candidate_pool)])
-        chosen.pop("category", None)
-        picks.append(chosen)
-
-    return picks[:max_items]
+def select_timeline_resources(
+    path_a: str,
+    path_b: str,
+    constraints: str | None = None,
+    *,
+    writing_samples: str | None = None,
+    decision_category: str | None = None,
+) -> tuple[list[dict], str]:
+    """Return structured stage-06 resources with server-generated explanations."""
+    picks, bottleneck = select_deterministic_resources(
+        path_a,
+        path_b,
+        constraints,
+        writing_samples=writing_samples,
+        max_items=3,
+        decision_category=decision_category,
+    )
+    items = [
+        {
+            "type": resource["type"],
+            "title": resource["title"],
+            "author": resource["author"],
+            "why_it_helps": resource["why"],
+            "url": resource["url"],
+        }
+        for resource in picks
+    ]
+    return items, bottleneck

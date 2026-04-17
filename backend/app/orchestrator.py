@@ -8,19 +8,17 @@ Edge cases handled:
 - Verdict output validated for prompt leakage
 
 Supports both OpenAI and Bedrock via DIVERGE_MODEL_PROVIDER setting.
-Token-level streaming supported via QueueCallbackHandler.
+Streaming routes emit already-validated text in chunks.
 """
 
 import re
-import json
 import uuid
 import time
 import random
 import logging
-import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Callable
 from strands import Agent
 
 from app.config import get_settings
@@ -30,12 +28,21 @@ from app.agents.prompts import (
     PERSONA_CHALLENGER, PERSONA_DEFENDER, PERSONA_EQUAL,
 )
 from app.agents.metrics import extract_metrics
+from app.content_guardrails import (
+    ValidationResult,
+    build_grounding_profile,
+    format_violation_report,
+    log_validation_failure,
+    strict_grounding_rewrite_brief,
+    validate_generated_text,
+)
 from app.schemas import (
     DebateResponse,
     Resource,
     RoundMetrics,
     RoundResult,
     StructuredTimeline,
+    StructuredTimelineCore,
     TimelineExploreItem,
 )
 from app.tools.monte_carlo import monte_carlo_financial
@@ -104,6 +111,135 @@ def _clean_ai_slop(text: str) -> str:
     return text.strip()
 
 
+def _guardrail_stats(user_ctx: dict) -> dict[str, int]:
+    stats = user_ctx.setdefault(
+        "_content_guardrail_stats",
+        {
+            "biography_violations": 0,
+            "style_violations": 0,
+            "resource_selector_fallbacks": 0,
+        },
+    )
+    return stats
+
+
+def _record_guardrail_failures(user_ctx: dict, result) -> None:
+    stats = _guardrail_stats(user_ctx)
+    for violation in result.violations:
+        if violation.code.startswith("invented_") or "biography" in violation.code:
+            stats["biography_violations"] += 1
+        else:
+            stats["style_violations"] += 1
+
+
+def _validated_transcript_texts(transcript: list[RoundResult] | None) -> list[str]:
+    texts: list[str] = []
+    for round_result in transcript or []:
+        if round_result.status != "completed":
+            continue
+        texts.extend([round_result.alpha, round_result.beta])
+    return texts
+
+
+def _append_rewrite_instruction(base_input: str, rewrite_instruction: str) -> str:
+    if not rewrite_instruction:
+        return base_input
+    return f"{base_input}\n\nREWRITE REQUIREMENTS:\n{rewrite_instruction}"
+
+
+def _iter_stream_events_for_text(
+    text: str,
+    *,
+    event_type: str,
+    agent: str | None = None,
+    round_num: int | None = None,
+    chunk_words: int = 14,
+):
+    words = re.findall(r"\S+\s*", text)
+    if not words and text:
+        words = [text]
+
+    for index in range(0, len(words), chunk_words):
+        payload = {
+            "type": event_type,
+            "text": "".join(words[index:index + chunk_words]),
+        }
+        if agent is not None:
+            payload["agent"] = agent
+        if round_num is not None:
+            payload["round"] = round_num
+        yield payload
+
+
+def _generate_with_guardrails(
+    *,
+    user_ctx: dict,
+    transcript: list[RoundResult] | None,
+    extra_prior_texts: list[str] | None = None,
+    content_kind: str,
+    stage_label: str,
+    fallback_text: str,
+    generator: Callable[[str], str],
+    path_a: str | None = None,
+    path_b: str | None = None,
+) -> str:
+    """Run generation with validation, corrective rewrite, and strict fallback."""
+    prior_texts = _validated_transcript_texts(transcript)
+    if extra_prior_texts:
+        prior_texts.extend(extra_prior_texts)
+    rewrite_instruction = ""
+    debate_id = user_ctx.get("debate_id")
+
+    for attempt in range(3):
+        text = generator(rewrite_instruction).strip()
+        if not text:
+            rewrite_instruction = strict_grounding_rewrite_brief()
+            continue
+
+        profile = build_grounding_profile(user_ctx, prior_texts)
+        result = validate_generated_text(
+            text,
+            profile,
+            content_kind,
+            path_a=path_a,
+            path_b=path_b,
+        )
+        if result.is_valid:
+            return text
+
+        log_validation_failure(debate_id, stage_label, result)
+        _record_guardrail_failures(user_ctx, result)
+        rewrite_instruction = format_violation_report(result) if attempt == 0 else strict_grounding_rewrite_brief()
+
+    return fallback_text
+
+
+def _build_round_fallback_text(path: str, timeline: str) -> str:
+    return (
+        f"Right now, living with {path.lower()} in {timeline} feels less dramatic and more concrete. "
+        "The tradeoff is real, and it keeps showing up in daily pressure, relief, and responsibility."
+    )
+
+
+def _build_verdict_fallback_text(user_ctx: dict) -> str:
+    path_a = user_ctx["path_a"]
+    path_b = user_ctx["path_b"]
+    return (
+        f"**Where {path_a} wins:**\n"
+        "- It preserves something tangible that matters in the context you gave.\n"
+        "- It carries a downside, but that downside is legible.\n\n"
+        f"**Where {path_b} wins:**\n"
+        "- It opens a form of upside the safer path cannot create.\n"
+        "- It may fit if the hidden cost of staying still is bigger than the visible risk.\n\n"
+        "**What this decision is really about:**\n"
+        "This is not just about preference. It is about which form of uncertainty you are more willing to live with once the adrenaline wears off.\n\n"
+        "**The bottleneck:**\n"
+        "The main blocker looks like overprotection against the wrong kind of pain rather than lack of information.\n\n"
+        "**Your next move:**\n"
+        "Right now, do this: write one sentence for what each path protects, and one sentence for what each path delays."
+    )
+
+
 MAX_RETRIES = 3
 FINANCIAL_TOOLS = [monte_carlo_financial, get_salary_data, compare_cost_of_living, calculate_runway]
 
@@ -148,25 +284,6 @@ def _pop_interjection(debate_id: str) -> str | None:
     if interjections:
         return interjections.pop(0)
     return None
-
-
-class QueueCallbackHandler:
-    """Callback handler that pushes tokens into a thread-safe queue for SSE streaming."""
-
-    def __init__(self, token_queue: queue.Queue, agent_label: str, round_num: int):
-        self.q = token_queue
-        self.agent_label = agent_label
-        self.round_num = round_num
-
-    def __call__(self, **kwargs: Any) -> None:
-        data = kwargs.get("data", "")
-        if data:
-            self.q.put({
-                "type": "token",
-                "agent": self.agent_label,
-                "round": self.round_num,
-                "text": data,
-            })
 
 
 def _make_model(max_tokens: int | None = None, temperature: float | None = None):
@@ -318,18 +435,17 @@ def _get_chronological_awareness_window(round_num: int) -> str:
 
 
 def _build_chronological_awareness_rule(agent_name: str, round_num: int) -> str:
-    """Force the agent to weaponize or defend the widening timeline gap explicitly."""
+    """Force the agent to acknowledge the widening timeline gap explicitly."""
     elapsed_window = _get_chronological_awareness_window(round_num)
 
     if agent_name.lower() == "alpha":
         agent_specific_rule = (
-            f'- If you are Alpha, you must weaponize the timeline. Contrast your compounding growth over the last {elapsed_window} '
-            "with Beta's stagnation. "
-            "(e.g., 'It has been 3 years now. Look at what my choice built, while you are still stuck where we started.')"
+            f"- If you are Alpha, contrast your long-term reality over the last {elapsed_window} "
+            "with what the other path would likely cost or preserve."
         )
     else:
         agent_specific_rule = (
-            f"- If you are Beta, you must defend your long-term reality based on the time passed, or express the compounding regret of the last {elapsed_window}."
+            f"- If you are Beta, explain your long-term reality based on the time passed, and name what the other path would likely cost or preserve over the last {elapsed_window}."
         )
 
     return (
@@ -380,7 +496,7 @@ def _build_runtime_wrapper_prompt(
         f"\"{prev_response}\"\n\n"
         "YOUR TURN:\n"
         "1. Start by directly addressing the exact scene or feeling they just described. "
-        "Name the illusion they are clinging to or the hidden cost they are ignoring in that specific moment.\n"
+        "Name the tradeoff or blind spot they are minimizing in that specific moment without mocking them.\n"
         f"2. Then, pivot to YOUR reality right now at {timeline}.\n"
         f'3. CRITICAL TIME RULE: Do NOT use the phrase "I remember" or tell a story in the past tense. '
         f"You are living this moment RIGHT NOW in {timeline}. Make it visceral. "
@@ -388,7 +504,8 @@ def _build_runtime_wrapper_prompt(
         "4. CRITICAL SETTING RULE: You may not remain in the exact physical setting from a previous round. "
         "Change the environment to prove time has passed.\n"
         "5. CRITICAL DETAIL RULE: Drop trivial old details like clothes or exact rooms from earlier rounds. "
-        "Focus on the long-term compounding consequences."
+        "Focus on the long-term compounding consequences.\n"
+        "6. DO NOT use attack-dog openers like 'You think...', 'It's an illusion', or 'Let's be real'."
     )
 
 
@@ -404,39 +521,6 @@ def _assign_personas(path_a: str, path_b: str) -> tuple[dict, dict]:
         return PERSONA_DEFENDER, PERSONA_CHALLENGER
     else:
         return PERSONA_EQUAL, PERSONA_EQUAL
-
-
-def _resource_candidate_signature(resource: dict | TimelineExploreItem) -> tuple[str, str, str, str]:
-    """Normalize a candidate resource into a stable comparison key."""
-    if isinstance(resource, TimelineExploreItem):
-        return (
-            resource.type.strip().lower(),
-            resource.title.strip(),
-            resource.author.strip(),
-            resource.url.strip(),
-        )
-
-    return (
-        str(resource.get("type", "")).strip().lower(),
-        str(resource.get("title", "")).strip(),
-        str(resource.get("author", "")).strip(),
-        str(resource.get("url", "")).strip(),
-    )
-
-
-def _format_candidates_for_prompt(candidates: list[dict]) -> str:
-    """Serialize the vetted candidate list into a compact prompt-friendly JSON string."""
-    prompt_candidates = [
-        {
-            "type": candidate["type"],
-            "title": candidate["title"],
-            "author": candidate["author"],
-            "url": candidate["url"],
-            "catalog_why": candidate["why"],
-        }
-        for candidate in candidates
-    ]
-    return json.dumps(prompt_candidates, indent=2, ensure_ascii=False)
 
 
 def _build_stage06_fallback(user_ctx: dict) -> list[TimelineExploreItem]:
@@ -455,40 +539,82 @@ def _build_stage06_fallback(user_ctx: dict) -> list[TimelineExploreItem]:
     ]
 
 
-def _finalize_structured_timeline(
-    timeline: StructuredTimeline,
-    user_ctx: dict,
-    candidates: list[dict],
-) -> StructuredTimeline:
-    """Validate stage-06 selections against vetted candidates and repair with fallback if needed."""
-    fallback_items = _build_stage06_fallback(user_ctx)
-    candidate_map = {_resource_candidate_signature(candidate): candidate for candidate in candidates}
-    valid_types = {"book", "video", "concept"}
+def _build_stage06_items(user_ctx: dict) -> list[TimelineExploreItem]:
+    """Select deterministic stage-06 resources server-side."""
+    try:
+        from app.data.resources import select_timeline_resources
 
-    items = list(timeline.stage_06_what_to_explore_next or [])
-    if len(items) != 3 or {item.type for item in items} != valid_types:
-        return timeline.model_copy(update={"stage_06_what_to_explore_next": fallback_items})
-
-    type_order = {"book": 0, "video": 1, "concept": 2}
-    normalized_items: list[TimelineExploreItem] = []
-
-    for item in sorted(items, key=lambda current: type_order.get(current.type, 99)):
-        key = _resource_candidate_signature(item)
-        candidate = candidate_map.get(key)
-        if not candidate or not item.why_it_helps.strip():
-            return timeline.model_copy(update={"stage_06_what_to_explore_next": fallback_items})
-
-        normalized_items.append(
-            TimelineExploreItem(
-                type=item.type,
-                title=candidate["title"],
-                author=candidate["author"],
-                why_it_helps=item.why_it_helps.strip(),
-                url=candidate["url"],
-            )
+        items, _ = select_timeline_resources(
+            user_ctx.get("path_a", ""),
+            user_ctx.get("path_b", ""),
+            user_ctx.get("constraints"),
+            writing_samples=user_ctx.get("writing_samples"),
+            decision_category=user_ctx.get("_category"),
         )
+        return [TimelineExploreItem(**item) for item in items]
+    except Exception as e:
+        logger.warning("Failed to build stage-06 resources: %s", e)
+        _guardrail_stats(user_ctx)["resource_selector_fallbacks"] += 1
+        return _build_stage06_fallback(user_ctx)
 
-    return timeline.model_copy(update={"stage_06_what_to_explore_next": normalized_items})
+
+def _validate_timeline_core(
+    timeline: StructuredTimelineCore,
+    transcript: list[RoundResult],
+    user_ctx: dict,
+) -> ValidationResult:
+    """Validate each timeline passage against grounding/style guardrails."""
+    profile = build_grounding_profile(user_ctx, _validated_transcript_texts(transcript))
+    all_violations = []
+    fields = [
+        ("timeline.stage_01.path_a", timeline.stage_01_the_ripple_year_1.path_a_safe),
+        ("timeline.stage_01.path_b", timeline.stage_01_the_ripple_year_1.path_b_bet),
+        ("timeline.stage_02.path_a", timeline.stage_02_the_ledger_year_3.path_a_safe),
+        ("timeline.stage_02.path_b", timeline.stage_02_the_ledger_year_3.path_b_bet),
+        ("timeline.stage_03.path_a", timeline.stage_03_the_mirror_year_5.path_a_safe),
+        ("timeline.stage_03.path_b", timeline.stage_03_the_mirror_year_5.path_b_bet),
+        ("timeline.stage_04.path_a", timeline.stage_04_the_ghost_year_10.path_a_safe),
+        ("timeline.stage_04.path_b", timeline.stage_04_the_ghost_year_10.path_b_bet),
+        ("timeline.stage_05.path_a", timeline.stage_05_the_knot_final_words.path_a_safe),
+        ("timeline.stage_05.path_b", timeline.stage_05_the_knot_final_words.path_b_bet),
+    ]
+    for stage_label, passage in fields:
+        result = validate_generated_text(passage, profile, "timeline_stage")
+        if not result.is_valid:
+            log_validation_failure(user_ctx.get("debate_id"), stage_label, result)
+            all_violations.extend(result.violations)
+    return ValidationResult(violations=all_violations)
+
+
+def _build_structured_timeline_fallback(user_ctx: dict) -> StructuredTimeline:
+    """Create a grounded generic structured timeline fallback."""
+    path_a = user_ctx["path_a"]
+    path_b = user_ctx["path_b"]
+    stage06 = _build_stage06_items(user_ctx)
+    return StructuredTimeline(
+        stage_01_the_ripple_year_1={
+            "path_a_safe": f"One year in, {path_a.lower()} feels real in the day-to-day tradeoffs, not just in theory.",
+            "path_b_bet": f"One year in, {path_b.lower()} feels real in the day-to-day tradeoffs, not just in theory.",
+        },
+        stage_02_the_ledger_year_3={
+            "path_a_safe": f"Three years in, {path_a.lower()} has turned into a pattern of costs and protections that is hard to ignore.",
+            "path_b_bet": f"Three years in, {path_b.lower()} has turned into a pattern of costs and protections that is hard to ignore.",
+        },
+        stage_03_the_mirror_year_5={
+            "path_a_safe": f"Five years in, {path_a.lower()} has clearly shaped identity, energy, and what feels possible next.",
+            "path_b_bet": f"Five years in, {path_b.lower()} has clearly shaped identity, energy, and what feels possible next.",
+        },
+        stage_04_the_ghost_year_10={
+            "path_a_safe": f"Ten years in, {path_a.lower()} carries a long tail of reliefs and tradeoffs that can no longer be abstracted away.",
+            "path_b_bet": f"Ten years in, {path_b.lower()} carries a long tail of reliefs and tradeoffs that can no longer be abstracted away.",
+        },
+        stage_05_the_knot_final_words={
+            "path_a_safe": f"{path_a} protects something important, but it asks for a real cost.",
+            "path_b_bet": f"{path_b} opens something meaningful, but it asks for a real cost.",
+            "verdict_path_of_least_regret": "The path of least regret depends on which form of uncertainty this person is actually willing to carry.",
+        },
+        stage_06_what_to_explore_next=stage06,
+    )
 
 
 def _generate_structured_timeline(transcript: list[RoundResult], user_ctx: dict) -> StructuredTimeline | None:
@@ -497,23 +623,15 @@ def _generate_structured_timeline(transcript: list[RoundResult], user_ctx: dict)
     if not full_text:
         return None
 
-    from app.data.resources import shortlist_resource_candidates
-
-    candidates = shortlist_resource_candidates(
-        user_ctx.get("path_a", ""),
-        user_ctx.get("path_b", ""),
-        user_ctx.get("constraints"),
-        max_candidates=12,
-    )
-    prompt = build_timeline_simulator_prompt(
-        user_ctx,
-        full_text,
-        _format_candidates_for_prompt(candidates),
-    )
+    prompt = build_timeline_simulator_prompt(user_ctx, full_text)
     settings = get_settings()
+    rewrite_instruction = ""
 
-    for attempt in range(2):
+    for attempt in range(3):
         try:
+            user_message = "Generate the structured timeline JSON now."
+            if rewrite_instruction:
+                user_message = f"{user_message}\n\n{rewrite_instruction}"
             if settings.model_provider == "openai":
                 from openai import OpenAI
 
@@ -524,27 +642,43 @@ def _generate_structured_timeline(transcript: list[RoundResult], user_ctx: dict)
                     max_completion_tokens=1800,
                     messages=[
                         {"role": "system", "content": prompt},
-                        {"role": "user", "content": "Generate the structured timeline JSON now."},
+                        {"role": "user", "content": user_message},
                     ],
-                    response_format=StructuredTimeline,
+                    response_format=StructuredTimelineCore,
                 )
                 parsed = completion.choices[0].message.parsed
                 if parsed:
-                    return _finalize_structured_timeline(parsed, user_ctx, candidates)
+                    validation = _validate_timeline_core(parsed, transcript, user_ctx)
+                    if validation.is_valid:
+                        return StructuredTimeline(
+                            **parsed.model_dump(),
+                            stage_06_what_to_explore_next=_build_stage06_items(user_ctx),
+                        )
+                    _record_guardrail_failures(user_ctx, validation)
+                    rewrite_instruction = format_violation_report(validation) if attempt == 0 else strict_grounding_rewrite_brief()
             else:
                 timeline_agent = Agent(
                     model=_make_model(max_tokens=1800, temperature=0.4),
                     system_prompt=prompt,
                 )
-                raw = timeline_agent("Generate the structured timeline JSON now.")
-                parsed = StructuredTimeline.model_validate_json(_strip_json_fences(str(raw)))
-                return _finalize_structured_timeline(parsed, user_ctx, candidates)
+                raw = timeline_agent(user_message)
+                parsed = StructuredTimelineCore.model_validate_json(_strip_json_fences(str(raw)))
+                validation = _validate_timeline_core(parsed, transcript, user_ctx)
+                if validation.is_valid:
+                    return StructuredTimeline(
+                        **parsed.model_dump(),
+                        stage_06_what_to_explore_next=_build_stage06_items(user_ctx),
+                    )
+                _record_guardrail_failures(user_ctx, validation)
+                rewrite_instruction = format_violation_report(validation) if attempt == 0 else strict_grounding_rewrite_brief()
         except Exception as e:
             logger.error("Structured timeline generation attempt %s failed: %s", attempt + 1, e)
-            if attempt < 1:
+            rewrite_instruction = strict_grounding_rewrite_brief()
+            if attempt < 2:
                 time.sleep(1.5)
 
-    return None
+    _guardrail_stats(user_ctx)["resource_selector_fallbacks"] += 1
+    return _build_structured_timeline_fallback(user_ctx)
 
 
 def _run_round(
@@ -552,6 +686,7 @@ def _run_round(
     user_ctx: dict,
     prev_beta: str | None,
     round_num: int,
+    transcript: list[RoundResult] | None,
     debate_summary: str,
     tools: list,
     alpha_persona: dict,
@@ -565,16 +700,12 @@ def _run_round(
     for attempt in range(MAX_RETRIES):
         try:
             chronology_guardrail = _build_chronology_guardrail(user_ctx, round_info, round_num)
-            alpha_agent = Agent(
-                model=_make_model(),
-                system_prompt=_build_round_system_prompt(
-                    build_alpha_prompt(user_ctx, round_info, alpha_persona),
-                    user_ctx,
-                    round_info,
-                    round_num,
-                    "Alpha",
-                ),
-                tools=tools,
+            alpha_system_prompt = _build_round_system_prompt(
+                build_alpha_prompt(user_ctx, round_info, alpha_persona),
+                user_ctx,
+                round_info,
+                round_num,
+                "Alpha",
             )
             path_a = user_ctx["path_a"]
             path_b = user_ctx["path_b"]
@@ -597,25 +728,36 @@ def _run_round(
                     prev_response=prev_beta or "",
                     chronology_guardrail=chronology_guardrail,
                 )
-            raw_alpha = alpha_agent(alpha_input)
-            alpha_response = validate_safe_content(validate_agent_output(_safe_agent_output(raw_alpha)))
+            alpha_response = _generate_with_guardrails(
+                user_ctx=user_ctx,
+                transcript=transcript,
+                content_kind="round",
+                stage_label=f"round_{round_num + 1}.alpha",
+                fallback_text=_build_round_fallback_text(path_a, timeline),
+                generator=lambda rewrite_instruction: validate_safe_content(
+                    validate_agent_output(
+                        _safe_agent_output(
+                            Agent(
+                                model=_make_model(),
+                                system_prompt=alpha_system_prompt,
+                                tools=tools,
+                            )(_append_rewrite_instruction(alpha_input, rewrite_instruction))
+                        )
+                    )
+                ),
+            )
 
             if not alpha_response:
                 raise ValueError("Alpha agent returned empty response")
 
-            beta_agent = Agent(
-                model=_make_model(),
-                system_prompt=_build_round_system_prompt(
-                    build_beta_prompt(user_ctx, round_info, beta_persona),
-                    user_ctx,
-                    round_info,
-                    round_num,
-                    "Beta",
-                ),
-                tools=tools,
+            beta_system_prompt = _build_round_system_prompt(
+                build_beta_prompt(user_ctx, round_info, beta_persona),
+                user_ctx,
+                round_info,
+                round_num,
+                "Beta",
             )
-            raw_beta = beta_agent(
-                _build_runtime_wrapper_prompt(
+            beta_input = _build_runtime_wrapper_prompt(
                     debate_summary=debate_summary,
                     interjection=interjection,
                     path=path_b,
@@ -623,8 +765,25 @@ def _run_round(
                     prev_response=alpha_response,
                     chronology_guardrail=chronology_guardrail,
                 )
+            beta_response = _generate_with_guardrails(
+                user_ctx=user_ctx,
+                transcript=transcript,
+                extra_prior_texts=[alpha_response],
+                content_kind="round",
+                stage_label=f"round_{round_num + 1}.beta",
+                fallback_text=_build_round_fallback_text(path_b, timeline),
+                generator=lambda rewrite_instruction: validate_safe_content(
+                    validate_agent_output(
+                        _safe_agent_output(
+                            Agent(
+                                model=_make_model(),
+                                system_prompt=beta_system_prompt,
+                                tools=tools,
+                            )(_append_rewrite_instruction(beta_input, rewrite_instruction))
+                        )
+                    )
+                ),
             )
-            beta_response = validate_safe_content(validate_agent_output(_safe_agent_output(raw_beta)))
 
             if not beta_response:
                 raise ValueError("Beta agent returned empty response")
@@ -679,22 +838,29 @@ def _generate_verdict(transcript: list[RoundResult], user_ctx: dict) -> str:
 
     prompt = build_verdict_prompt(user_ctx, full_text)
 
-    for attempt in range(2):
-        try:
-            verdict_agent = Agent(
-                model=_make_model(max_tokens=2048, temperature=0.6),
-                system_prompt=prompt,
-            )
-            raw = verdict_agent("Give your verdict now.")
-            result = validate_safe_content(validate_agent_output(_safe_agent_output(raw)))
-            if result:
-                return result
-        except Exception as e:
-            logger.error(f"Verdict generation attempt {attempt + 1} failed: {e}")
-            if attempt < 1:
-                time.sleep(2)
-
-    return "The verdict could not be generated. Please review the debate rounds above."
+    try:
+        return _generate_with_guardrails(
+            user_ctx=user_ctx,
+            transcript=transcript,
+            content_kind="verdict",
+            stage_label="verdict",
+            fallback_text=_build_verdict_fallback_text(user_ctx),
+            path_a=user_ctx["path_a"],
+            path_b=user_ctx["path_b"],
+            generator=lambda rewrite_instruction: validate_safe_content(
+                validate_agent_output(
+                    _safe_agent_output(
+                        Agent(
+                            model=_make_model(max_tokens=2048, temperature=0.6),
+                            system_prompt=prompt,
+                        )(_append_rewrite_instruction("Give your verdict now.", rewrite_instruction))
+                    )
+                )
+            ),
+        )
+    except Exception as e:
+        logger.error("Verdict generation failed: %s", e)
+        return _build_verdict_fallback_text(user_ctx)
 
 
 def _get_resources(user_context: dict) -> list[Resource]:
@@ -707,6 +873,8 @@ def _get_resources(user_context: dict) -> list[Resource]:
             user_context.get("path_b", ""),
             user_context.get("constraints"),
             max_items=3,
+            decision_category=user_context.get("_category"),
+            writing_samples=user_context.get("writing_samples"),
         )
         return [Resource(**resource) for resource in raw]
     except Exception as e:
@@ -741,7 +909,14 @@ def run_debate(user_context: dict) -> DebateResponse:
     prev_beta = None
     debate_summary = ""
 
-    category = detect_decision_category(user_context["path_a"], user_context["path_b"])
+    category = detect_decision_category(
+        user_context["path_a"],
+        user_context["path_b"],
+        constraints=user_context.get("constraints"),
+        writing_samples=user_context.get("writing_samples"),
+        template_id=user_context.get("template_id"),
+    )
+    user_context["debate_id"] = debate_id
     user_context["_category"] = category
     alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
     rounds = get_rounds(category)
@@ -755,7 +930,7 @@ def run_debate(user_context: dict) -> DebateResponse:
 
     for i, round_info in enumerate(rounds):
         logger.info(f"Debate {debate_id}: Starting round {i + 1} ({round_info['name']})")
-        result = _run_round(round_info, user_context, prev_beta, i, debate_summary, tools, alpha_persona, beta_persona)
+        result = _run_round(round_info, user_context, prev_beta, i, transcript, debate_summary, tools, alpha_persona, beta_persona)
         transcript.append(result)
         all_metrics.append(result.metrics)
         prev_beta = result.beta if result.status == "completed" else prev_beta
@@ -783,6 +958,7 @@ def run_debate(user_context: dict) -> DebateResponse:
 
     elapsed = time.time() - start_time
     logger.info(f"Debate {debate_id} finished in {elapsed:.1f}s ({len(completed)}/{len(rounds)} rounds, category={category})")
+    logger.info("Content guardrail stats debate_id=%s stats=%s", debate_id, _guardrail_stats(user_context))
 
     resources = _get_resources(user_context)
 
@@ -814,7 +990,14 @@ def run_debate_streaming(user_context: dict):
     prev_beta = None
     debate_summary = ""
 
-    category = detect_decision_category(user_context["path_a"], user_context["path_b"])
+    category = detect_decision_category(
+        user_context["path_a"],
+        user_context["path_b"],
+        constraints=user_context.get("constraints"),
+        writing_samples=user_context.get("writing_samples"),
+        template_id=user_context.get("template_id"),
+    )
+    user_context["debate_id"] = debate_id
     user_context["_category"] = category
     alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
     rounds = get_rounds(category)
@@ -828,7 +1011,7 @@ def run_debate_streaming(user_context: dict):
 
     for i, round_info in enumerate(rounds):
         logger.info(f"Streaming debate {debate_id}: round {i + 1}")
-        result = _run_round(round_info, user_context, prev_beta, i, debate_summary, tools, alpha_persona, beta_persona)
+        result = _run_round(round_info, user_context, prev_beta, i, transcript, debate_summary, tools, alpha_persona, beta_persona)
         transcript.append(result)
         all_metrics.append(result.metrics)
         prev_beta = result.beta if result.status == "completed" else prev_beta
@@ -867,30 +1050,11 @@ def run_debate_streaming(user_context: dict):
     }
 
 
-def _run_agent_with_streaming(
-    system_prompt: str,
-    user_input: str,
-    tools: list,
-    token_queue: queue.Queue,
-    agent_label: str,
-    round_num: int,
-) -> str:
-    """Run an agent with a streaming callback, returning the full response text."""
-    handler = QueueCallbackHandler(token_queue, agent_label, round_num)
-    agent = Agent(
-        model=_make_model(),
-        system_prompt=system_prompt,
-        tools=tools,
-        callback_handler=handler,
-    )
-    raw = agent(user_input)
-    return _safe_agent_output(raw)
-
-
 def _stream_single_round(
     round_index: int,
     round_info: dict,
     user_context: dict,
+    transcript: list[RoundResult],
     prev_beta: str | None,
     debate_summary: str,
     interjection: str | None,
@@ -913,164 +1077,38 @@ def _stream_single_round(
         "round_title": round_info["title"],
     }
 
-    path_a = user_context["path_a"]
-    path_b = user_context["path_b"]
-    timeline = round_info.get("timeline", f"round {i + 1}")
-    chronology_guardrail = _build_chronology_guardrail(user_context, round_info, i)
+    result = _run_round(
+        round_info,
+        user_context,
+        prev_beta,
+        i,
+        transcript,
+        debate_summary,
+        tools,
+        alpha_persona,
+        beta_persona,
+        interjection=interjection,
+    )
 
-    token_q: queue.Queue = queue.Queue()
-    alpha_response = ""
-    beta_response = ""
-
-    if i == 0:
-        alpha_input = (
-            f"{chronology_guardrail}\n\n"
-            f'You chose "{path_a}". You are living in {timeline} right now. '
-            f'Do NOT use the phrase "I remember" or tell this in the past tense. '
-            f"Speak from one emotionally loaded moment that makes this reality feel current, physical, and concrete. "
-            f"Do not trap the rest of the timeline inside this exact room or trivial detail."
-        )
-    else:
-        alpha_input = _build_runtime_wrapper_prompt(
-            debate_summary=debate_summary,
-            interjection=interjection,
-            path=path_a,
-            timeline=timeline,
-            prev_response=prev_beta or "",
-            chronology_guardrail=chronology_guardrail,
-        )
-
-    try:
-        alpha_result_holder: list[str] = []
-        alpha_error_holder: list[Exception] = []
-
-        def run_alpha():
-            try:
-                text = _run_agent_with_streaming(
-                    _build_round_system_prompt(
-                        build_alpha_prompt(user_context, round_info, alpha_persona),
-                        user_context,
-                        round_info,
-                        i,
-                        "Alpha",
-                    ),
-                    alpha_input, tools, token_q, "alpha", i + 1,
-                )
-                alpha_result_holder.append(text)
-            except Exception as e:
-                alpha_error_holder.append(e)
-            finally:
-                token_q.put({"type": "_done"})
-
-        thread = threading.Thread(target=run_alpha, daemon=True)
-        thread.start()
-
-        while True:
-            try:
-                event = token_q.get(timeout=180)
-            except queue.Empty:
-                break
-            if event.get("type") == "_done":
-                break
+    if result.alpha:
+        for event in _iter_stream_events_for_text(
+            result.alpha,
+            event_type="token",
+            agent="alpha",
+            round_num=i + 1,
+        ):
             yield event
+    yield {"type": "agent_done", "agent": "alpha", "round": i + 1}
 
-        thread.join(timeout=5)
-
-        if alpha_error_holder:
-            raise alpha_error_holder[0]
-        alpha_response = validate_safe_content(
-            validate_agent_output(alpha_result_holder[0] if alpha_result_holder else "")
-        )
-        if not alpha_response:
-            raise ValueError("Alpha agent returned empty response")
-
-        yield {"type": "agent_done", "agent": "alpha", "round": i + 1}
-
-        beta_q: queue.Queue = queue.Queue()
-        beta_input = _build_runtime_wrapper_prompt(
-            debate_summary=debate_summary,
-            interjection=interjection,
-            path=path_b,
-            timeline=timeline,
-            prev_response=alpha_response,
-            chronology_guardrail=chronology_guardrail,
-        )
-
-        beta_result_holder: list[str] = []
-        beta_error_holder: list[Exception] = []
-
-        def run_beta():
-            try:
-                text = _run_agent_with_streaming(
-                    _build_round_system_prompt(
-                        build_beta_prompt(user_context, round_info, beta_persona),
-                        user_context,
-                        round_info,
-                        i,
-                        "Beta",
-                    ),
-                    beta_input, tools, beta_q, "beta", i + 1,
-                )
-                beta_result_holder.append(text)
-            except Exception as e:
-                beta_error_holder.append(e)
-            finally:
-                beta_q.put({"type": "_done"})
-
-        beta_thread = threading.Thread(target=run_beta, daemon=True)
-        beta_thread.start()
-
-        while True:
-            try:
-                event = beta_q.get(timeout=180)
-            except queue.Empty:
-                break
-            if event.get("type") == "_done":
-                break
+    if result.beta:
+        for event in _iter_stream_events_for_text(
+            result.beta,
+            event_type="token",
+            agent="beta",
+            round_num=i + 1,
+        ):
             yield event
-
-        beta_thread.join(timeout=5)
-
-        if beta_error_holder:
-            raise beta_error_holder[0]
-        beta_response = validate_safe_content(
-            validate_agent_output(beta_result_holder[0] if beta_result_holder else "")
-        )
-        if not beta_response:
-            raise ValueError("Beta agent returned empty response")
-
-        yield {"type": "agent_done", "agent": "beta", "round": i + 1}
-
-        debate_text = f"Path A argued:\n{alpha_response}\n\nPath B argued:\n{beta_response}"
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            metrics_future = pool.submit(extract_metrics, debate_text)
-            sentiment_future = pool.submit(analyze_round_sentiment, alpha_response, beta_response)
-            metrics = metrics_future.result()
-            sentiment = sentiment_future.result()
-
-        result = RoundResult(
-            round_number=i + 1,
-            round_name=round_info["name"],
-            round_title=round_info["title"],
-            alpha=alpha_response,
-            beta=beta_response,
-            metrics=metrics,
-            sentiment=sentiment,
-            status="completed",
-        )
-        _log_debug_round_trace(i + 1, round_info["name"], alpha_response, beta_response)
-
-    except Exception as e:
-        logger.warning(f"Token-streaming round {i + 1} failed: {type(e).__name__}: {e}")
-        result = RoundResult(
-            round_number=i + 1,
-            round_name=round_info["name"],
-            round_title=round_info["title"],
-            alpha=alpha_response or "This perspective could not be generated.",
-            beta=beta_response or "This perspective could not be generated.",
-            metrics=None,
-            status="partial",
-        )
+    yield {"type": "agent_done", "agent": "beta", "round": i + 1}
 
     updated_summary = debate_summary
     if result.status == "completed":
@@ -1105,7 +1143,14 @@ def run_debate_token_streaming(user_context: dict):
     prev_beta = None
     debate_summary = ""
 
-    category = detect_decision_category(user_context["path_a"], user_context["path_b"])
+    category = detect_decision_category(
+        user_context["path_a"],
+        user_context["path_b"],
+        constraints=user_context.get("constraints"),
+        writing_samples=user_context.get("writing_samples"),
+        template_id=user_context.get("template_id"),
+    )
+    user_context["debate_id"] = debate_id
     user_context["_category"] = category
     alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
     rounds = get_rounds(category)
@@ -1139,6 +1184,7 @@ def run_debate_token_streaming(user_context: dict):
             round_index=i,
             round_info=round_info,
             user_context=user_context,
+            transcript=transcript,
             prev_beta=prev_beta,
             debate_summary=debate_summary,
             interjection=interjection,
@@ -1156,50 +1202,9 @@ def run_debate_token_streaming(user_context: dict):
     timeline = None
     if len(completed) >= 3:
         yield {"type": "verdict_start"}
-        verdict_q: queue.Queue = queue.Queue()
-
-        verdict_text_holder: list[str] = []
-
-        def run_verdict():
-            try:
-                full_text = ""
-                for r in transcript:
-                    if r.status == "completed":
-                        full_text += f"\n--- Round {r.round_number}: {r.round_title} ---\n"
-                        full_text += f"Path A ({user_context['path_a']}): {r.alpha}\n"
-                        full_text += f"Path B ({user_context['path_b']}): {r.beta}\n"
-
-                prompt = build_verdict_prompt(user_context, full_text)
-                handler = QueueCallbackHandler(verdict_q, "verdict", 0)
-                verdict_agent = Agent(
-                    model=_make_model(max_tokens=2048, temperature=0.6),
-                    system_prompt=prompt,
-                    callback_handler=handler,
-                )
-                raw = verdict_agent("Give your verdict now.")
-                text = validate_safe_content(validate_agent_output(_safe_agent_output(raw)))
-                verdict_text_holder.append(text or "The verdict could not be generated.")
-            except Exception as e:
-                logger.error(f"Token-streaming verdict failed: {e}")
-                verdict_text_holder.append("The verdict could not be generated. Please review the debate rounds above.")
-            finally:
-                verdict_q.put({"type": "_done"})
-
-        v_thread = threading.Thread(target=run_verdict, daemon=True)
-        v_thread.start()
-
-        while True:
-            try:
-                event = verdict_q.get(timeout=180)
-            except queue.Empty:
-                break
-            if event.get("type") == "_done":
-                break
-            if event.get("type") == "token":
-                yield {"type": "verdict_token", "text": event["text"]}
-
-        v_thread.join(timeout=5)
-        verdict = verdict_text_holder[0] if verdict_text_holder else "The verdict could not be generated."
+        verdict = _generate_verdict(transcript, user_context)
+        for event in _iter_stream_events_for_text(verdict, event_type="verdict_token"):
+            yield event
         timeline = _generate_structured_timeline(transcript, user_context)
     elif len(completed) >= 1:
         verdict = f"Only {len(completed)} of 5 rounds completed. Partial analysis."

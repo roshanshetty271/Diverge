@@ -1,4 +1,4 @@
-import type { DarkQuoteItem, TemplateOption, RoundInfo } from "../types";
+import type { DarkQuoteItem, RoundInfo } from "../types";
 
 function normalizeServiceUrl(value: string | undefined): string {
   if (!value) return "";
@@ -30,18 +30,6 @@ export const DARK_QUOTES: DarkQuoteItem[] = [
   { text: "You've spent enough nights at 3am running scenarios. Time to watch them play out.", source: "Diverge" },
   { text: "Stop imagining the escape. See what's on the other side.", source: "Diverge" },
   { text: "The cost of not deciding is still a decision.", source: "Diverge" },
-];
-
-export const TEMPLATES: TemplateOption[] = [
-  { id: "career", title: "Career Change", question: "Should I stay or take the new offer?", pathA: "Stay at my current job", pathB: "Take the new opportunity", category: "financial" },
-  { id: "city", title: "New City", question: "Should I move or stay put?", pathA: "Stay in my current city", pathB: "Move somewhere new", category: "financial" },
-  { id: "startup", title: "Launch a Startup", question: "Should I go for it or play it safe?", pathA: "Stay employed", pathB: "Start my own thing", category: "financial" },
-  { id: "education", title: "Education", question: "Should I study or keep working?", pathA: "Keep working", pathB: "Go back to school", category: "financial" },
-  { id: "relationship", title: "Relationship", question: "Should I say something or let it go?", pathA: "Say what I feel", pathB: "Keep it to myself", category: "personal" },
-  { id: "lifestyle", title: "Lifestyle Change", question: "Should I make the change or stay comfortable?", pathA: "Commit to the change", pathB: "Keep things as they are", category: "personal" },
-  { id: "volunteer", title: "Give Back", question: "How should I serve my community?", pathA: "Volunteer locally with what I know", pathB: "Go where the need is greatest", category: "personal" },
-  { id: "trade", title: "Trade vs. Degree", question: "What's the smartest path forward?", pathA: "Learn a skilled trade", pathB: "Pursue a 4-year degree", category: "financial" },
-  { id: "family", title: "Family Crossroads", question: "How do I balance what I want with what they need?", pathA: "Prioritize family stability", pathB: "Take the risk for a better future", category: "personal" },
 ];
 
 export const ROUNDS: RoundInfo[] = [

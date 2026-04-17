@@ -4,6 +4,7 @@ import type {
   CheckpointedDebateResponse,
   DebateResponse,
   DecisionInput,
+  TemplateOption,
 } from "../types";
 
 const DEBATE_TIMEOUT_MS = 150_000;
@@ -71,8 +72,8 @@ export async function startDebate(
   });
 }
 
-export async function getTemplates(): Promise<unknown[]> {
-  return apiFetch<unknown[]>(`${API_BASE}/api/templates`);
+export async function getTemplates(): Promise<TemplateOption[]> {
+  return apiFetch<TemplateOption[]>(`${API_BASE}/api/templates`);
 }
 
 export async function getCapabilities(): Promise<Capabilities> {

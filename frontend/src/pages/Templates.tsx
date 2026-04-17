@@ -1,9 +1,10 @@
 import { useNavigate } from "react-router-dom";
-import { TEMPLATES } from "../utils/constants";
+import { useTemplateCatalog } from "../hooks/useTemplateCatalog";
 import type { TemplateOption } from "../types";
 
 export default function Templates() {
   const navigate = useNavigate();
+  const { templates, isLoading, error } = useTemplateCatalog();
 
   const handleSelect = (template: TemplateOption | "custom") => {
     if (template === "custom") {
@@ -69,7 +70,17 @@ export default function Templates() {
 
         {/* 3-Column Grid of Atmospheric Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-16">
-          {TEMPLATES.map((t) => (
+          {isLoading && (
+            <div className="col-span-full border border-white/10 bg-surface/20 p-6 text-sm text-gray-400">
+              Loading templates...
+            </div>
+          )}
+          {error && !isLoading && (
+            <div className="col-span-full border border-red-400/20 bg-red-500/5 p-6 text-sm text-red-200">
+              {error}
+            </div>
+          )}
+          {!isLoading && !error && templates.map((t) => (
             <div
               key={t.id}
               onClick={() => handleSelect(t)}

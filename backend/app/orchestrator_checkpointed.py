@@ -79,7 +79,13 @@ def _build_partial_verdict(transcript: list[RoundResult], user_context: dict, to
 def start_checkpointed_debate(user_context: dict, user_id: str = "anonymous") -> CheckpointedDebateResponse:
     """Run the first round only, then persist paused state."""
     debate_id = str(uuid.uuid4())
-    category = detect_decision_category(user_context["path_a"], user_context["path_b"])
+    category = detect_decision_category(
+        user_context["path_a"],
+        user_context["path_b"],
+        constraints=user_context.get("constraints"),
+        writing_samples=user_context.get("writing_samples"),
+        template_id=user_context.get("template_id"),
+    )
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
     alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
@@ -87,6 +93,7 @@ def start_checkpointed_debate(user_context: dict, user_id: str = "anonymous") ->
     enriched_context = {
         **user_context,
         "_category": category,
+        "debate_id": debate_id,
         "user_id": user_id,
     }
 
@@ -95,6 +102,7 @@ def start_checkpointed_debate(user_context: dict, user_id: str = "anonymous") ->
         enriched_context,
         None,
         0,
+        [],
         "",
         tools,
         alpha_persona,
@@ -183,6 +191,7 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
         user_context,
         prev_beta,
         current_round_index,
+        transcript,
         debate_summary,
         tools,
         alpha_persona,
@@ -310,6 +319,7 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
         round_index=current_round_index,
         round_info=round_info,
         user_context=user_context,
+        transcript=transcript,
         prev_beta=prev_beta,
         debate_summary=debate_summary,
         interjection=interjection,
