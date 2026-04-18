@@ -1,4 +1,8 @@
-from app.content_guardrails import build_grounding_profile, validate_generated_text
+from app.content_guardrails import (
+    build_grounding_profile,
+    scrub_repeated_motifs,
+    validate_generated_text,
+)
 
 
 def _base_user_ctx() -> dict:
@@ -71,3 +75,22 @@ def test_verdict_requires_new_headers_and_rejects_old_sections():
     assert "missing_verdict_header" in codes
     assert "old_verdict_header" in codes
     assert "deathbed_imagery" in codes
+
+
+def test_scrub_repeated_motif_can_rescue_coffee_cliche_without_other_violations():
+    user_ctx = _base_user_ctx()
+    prior_texts = ["I sit in a coffee shop wondering what I traded away."]
+    profile = build_grounding_profile(user_ctx, prior_texts=prior_texts)
+    text = (
+        "Three years in, I sit in a coffee shop and feel the cost of playing it safe. "
+        "The stability is real, but so is the distance I created."
+    )
+
+    result = validate_generated_text(text, profile, "round")
+    codes = {violation.code for violation in result.violations}
+    repaired = scrub_repeated_motifs(text, result)
+    repaired_result = validate_generated_text(repaired, profile, "round")
+
+    assert codes == {"repeated_motif"}
+    assert "coffee" not in repaired.lower()
+    assert repaired_result.is_valid

@@ -105,6 +105,10 @@ export async function continueCheckpointedDebate(
   });
 }
 
+export async function getCheckpointedDebateSession(debateId: string): Promise<CheckpointedDebateResponse> {
+  return apiFetch<CheckpointedDebateResponse>(`${CHECKPOINTED_BASE}/api/debate/session/${debateId}`);
+}
+
 export interface JournalResponse {
   items: Record<string, unknown>[];
   last_key?: Record<string, string>;

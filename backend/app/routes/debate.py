@@ -27,7 +27,9 @@ from app.db.dynamodb import get_debate_session, get_user_profile
 from app.orchestrator_checkpointed import (
     continue_checkpointed_debate,
     continue_checkpointed_streaming,
+    _session_to_response,
     start_checkpointed_debate,
+    start_checkpointed_streaming,
 )
 from app.orchestrator import run_debate, run_debate_streaming, run_debate_token_streaming, set_interjection
 from app.security.rate_limiter import check_rate_limit
@@ -278,6 +280,116 @@ def continue_checkpointed_debate_route(
     except Exception:
         logger.error("Checkpointed continue failed for %s", debate_id, exc_info=False)
         raise HTTPException(status_code=500, detail="The debate could not continue. Please try again.")
+
+
+@router.get("/debate/session/{debate_id}", response_model=CheckpointedDebateResponse)
+def get_checkpointed_debate_session_route(
+    debate_id: str,
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    """Fetch the latest checkpointed debate session state."""
+    _verify_origin(request)
+
+    if user:
+        check_rate_limit(request, max_requests=120, window_seconds=600, endpoint="debate-status", identity=f"user:{user['sub']}")
+    else:
+        check_rate_limit(request, max_requests=60, window_seconds=600, endpoint="debate-status")
+
+    session = get_debate_session(debate_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Debate session not found.")
+
+    session_user_id = session.get("user_id", "anonymous")
+    if session_user_id != "anonymous" and (not user or user.get("sub") != session_user_id):
+        raise HTTPException(status_code=403, detail="You don't have access to this debate session.")
+
+    return _session_to_response(debate_id, session)
+
+
+@router.post("/debate/session/start-stream")
+async def start_checkpointed_stream_route(
+    decision: DecisionInput,
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    """Stream the first round of a checkpointed debate via SSE."""
+    _verify_origin(request)
+    require_turnstile_for_anonymous_start(request, user)
+
+    all_text = f"{decision.path_a} {decision.path_b} {decision.constraints or ''}"
+    is_crisis, crisis_cat = detect_crisis(all_text)
+    if is_crisis:
+        logger.warning(
+            "Crisis signal detected in checkpointed stream (category=%s) from %s",
+            crisis_cat,
+            request.client.host if request.client else "unknown",
+        )
+        return JSONResponse({"type": "crisis", "category": crisis_cat, "resources": CRISIS_RESOURCES})
+
+    is_blocked, block_reason = detect_blocked_topic(
+        decision.path_a,
+        decision.path_b,
+        decision.constraints or "",
+    )
+    if is_blocked:
+        raise HTTPException(status_code=400, detail=block_reason)
+
+    if user:
+        check_rate_limit(request, max_requests=4, window_seconds=600, endpoint="debate-session:burst", identity=f"user:{user['sub']}")
+        check_rate_limit(request, max_requests=10, window_seconds=3600, endpoint="debate-session", identity=f"user:{user['sub']}")
+    else:
+        check_rate_limit(request, max_requests=2, window_seconds=600, endpoint="debate-session:burst")
+        check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="debate-session")
+
+    for field_name, field_value in [("path_a", decision.path_a), ("path_b", decision.path_b)]:
+        is_suspicious, pattern = detect_injection(field_value)
+        if is_suspicious:
+            logger.warning(f"Injection detected in {field_name}: '{pattern}' from {request.client.host}")
+            raise HTTPException(
+                status_code=400,
+                detail="Your input contains patterns that can't be processed. Please rephrase.",
+            )
+
+    user_context = _hydrate_from_profile(decision.model_dump(), user)
+    user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
+    user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
+    user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+    _log_debug_debate_input("debate.session.start-stream", user_context)
+
+    user_id = user["sub"] if user else "anonymous"
+    logger.info(
+        "Starting checkpointed stream debate: '%s' vs '%s' by %s",
+        decision.path_a,
+        decision.path_b,
+        user_id,
+    )
+
+    async def event_generator():
+        q: queue.Queue = queue.Queue()
+
+        def worker():
+            try:
+                for event in start_checkpointed_streaming(user_context, user_id=user_id):
+                    q.put(event)
+            except Exception as e:
+                q.put({"type": "error", "message": str(e)})
+            q.put(None)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        while True:
+            event = await asyncio.to_thread(q.get)
+            if event is None:
+                break
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/debate/session/{debate_id}/continue-stream")

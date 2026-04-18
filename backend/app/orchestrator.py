@@ -33,6 +33,7 @@ from app.content_guardrails import (
     build_grounding_profile,
     format_violation_report,
     log_validation_failure,
+    scrub_repeated_motifs,
     strict_grounding_rewrite_brief,
     validate_generated_text,
 )
@@ -210,6 +211,20 @@ def _generate_with_guardrails(
 
         log_validation_failure(debate_id, stage_label, result)
         _record_guardrail_failures(user_ctx, result)
+        motif_only_failure = result.violations and all(violation.code == "repeated_motif" for violation in result.violations)
+        if motif_only_failure:
+            scrubbed_text = scrub_repeated_motifs(text, result)
+            if scrubbed_text and scrubbed_text != text:
+                scrubbed_result = validate_generated_text(
+                    scrubbed_text,
+                    profile,
+                    content_kind,
+                    path_a=path_a,
+                    path_b=path_b,
+                )
+                if scrubbed_result.is_valid:
+                    logger.info("Motif scrub rescued stage=%s debate_id=%s", stage_label, debate_id)
+                    return scrubbed_text
         rewrite_instruction = format_violation_report(result) if attempt == 0 else strict_grounding_rewrite_brief()
 
     logger.warning("Guardrail exhaustion: returning fallback for stage=%s debate_id=%s", stage_label, debate_id)
@@ -231,7 +246,9 @@ def _build_round_fallback_text(path: str, timeline: str, category: str = "") -> 
     flavor = _CATEGORY_FALLBACK_FLAVOR.get(category, ("daily reality", "life choice"))
     return (
         f"Right now, living with {path.lower()} in {timeline} shows up in your {flavor[0]}. "
-        f"The tradeoff behind this {flavor[1]} is real, and it surfaces in pressure, relief, and responsibility."
+        f"This path gives something real, but it asks something real back.\n\n"
+        f"The tradeoff behind this {flavor[1]} surfaces in pressure, relief, and responsibility. "
+        "Nothing here is clean. It is simply the version of life you would have to keep waking up inside."
     )
 
 
@@ -422,12 +439,19 @@ def _build_chronology_guardrail(user_ctx: dict, round_info: dict, round_num: int
         if round_num > 0
         else "- This Year 1 scene is not a permanent set for the rest of the timeline. Do not lock future rounds into this exact room, outfit, or minute."
     )
+    final_round_line = (
+        "- FINAL WORDS RULE: This is the closing reckoning after living the consequences. Do NOT call it 'five years in', 'ten years in', 'year 5', or 'year 10'. "
+        "Speak from accumulated consequence, not a numbered milestone."
+        if round_num == 4
+        else ""
+    )
 
     return (
         "CHRONOLOGY ENFORCEMENT - FOLLOW THIS EXACTLY:\n"
         f"- This round takes place {jump_label}. Treat the lived moment as {timeline}.\n"
         f"{age_line}\n"
         f"{setting_line}\n"
+        f"{final_round_line}\n"
         "- The environment MUST evolve to reflect the passage of time. Use a new scene, new objects, and new stakes that make the years feel real.\n"
         "- If you revisit a familiar place, it must be obviously transformed by time and compounding consequences.\n"
         "- Drop trivial carryover details from Year 1 and earlier rounds: exact clothes, exact chair, exact wall color, exact cup, exact sentence, exact weather, exact body posture.\n"
@@ -467,6 +491,7 @@ def _build_chronological_awareness_rule(agent_name: str, round_num: int) -> str:
         "You must actively acknowledge the passage of time in your argument. Do not just describe your current state; "
         "you must explicitly reference how much time has passed since the decision was made.\n"
         f"{agent_specific_rule}\n"
+        f"{'- For the final round, talk like someone summing up the whole cost of a life, not someone narrating another five-year checkpoint.\n' if round_num == 4 else ''}"
         "- You MUST reference the timeline directly to show the widening gap between the two paths."
     )
 
@@ -653,7 +678,7 @@ def _generate_structured_timeline(transcript: list[RoundResult], user_ctx: dict)
                 completion = client.beta.chat.completions.parse(
                     model=settings.debate_model_id,
                     temperature=0.4,
-                    max_completion_tokens=1800,
+                    max_completion_tokens=3500,
                     messages=[
                         {"role": "system", "content": prompt},
                         {"role": "user", "content": user_message},
@@ -672,7 +697,7 @@ def _generate_structured_timeline(transcript: list[RoundResult], user_ctx: dict)
                     rewrite_instruction = format_violation_report(validation) if attempt == 0 else strict_grounding_rewrite_brief()
             else:
                 timeline_agent = Agent(
-                    model=_make_model(max_tokens=1800, temperature=0.4),
+                    model=_make_model(max_tokens=3500, temperature=0.4),
                     system_prompt=prompt,
                 )
                 raw = timeline_agent(user_message)
@@ -1069,6 +1094,178 @@ def run_debate_streaming(user_context: dict):
     }
 
 
+def _run_round_split(
+    round_info: dict,
+    user_ctx: dict,
+    prev_beta: str | None,
+    round_num: int,
+    transcript: list[RoundResult] | None,
+    debate_summary: str,
+    tools: list,
+    alpha_persona: dict,
+    beta_persona: dict,
+    interjection: str | None = None,
+):
+    """Like _run_round but yields alpha as soon as it's ready, then beta, then the final RoundResult.
+
+    Emits tuples: ('alpha', text), ('beta', text), ('result', RoundResult).
+    Keeps the same guardrail/retry/fallback semantics as _run_round; the only
+    behavioral difference is that alpha no longer waits for beta before being
+    returned to the caller.
+    """
+    chronology_guardrail = _build_chronology_guardrail(user_ctx, round_info, round_num)
+    alpha_system_prompt = _build_round_system_prompt(
+        build_alpha_prompt(user_ctx, round_info, alpha_persona),
+        user_ctx,
+        round_info,
+        round_num,
+        "Alpha",
+    )
+    path_a = user_ctx["path_a"]
+    path_b = user_ctx["path_b"]
+    timeline = round_info.get("timeline", f"round {round_num + 1}")
+
+    if round_num == 0:
+        alpha_input = (
+            f"{chronology_guardrail}\n\n"
+            f"You chose \"{path_a}\". You are living in {timeline} right now. "
+            f"Do NOT use the phrase \"I remember\" or tell this in the past tense. "
+            f"Speak from one emotionally loaded moment that makes this reality feel current, physical, and concrete. "
+            f"Do not trap the rest of the timeline inside this exact room or trivial detail."
+        )
+    else:
+        alpha_input = _build_runtime_wrapper_prompt(
+            debate_summary=debate_summary,
+            interjection=interjection,
+            path=path_a,
+            timeline=timeline,
+            prev_response=prev_beta or "",
+            chronology_guardrail=chronology_guardrail,
+        )
+
+    alpha_response = ""
+    for attempt in range(MAX_RETRIES):
+        try:
+            alpha_response = _generate_with_guardrails(
+                user_ctx=user_ctx,
+                transcript=transcript,
+                content_kind="round",
+                stage_label=f"round_{round_num + 1}.alpha",
+                fallback_text=_build_round_fallback_text(path_a, timeline, user_ctx.get("_category", "")),
+                generator=lambda rewrite_instruction: validate_safe_content(
+                    validate_agent_output(
+                        _safe_agent_output(
+                            Agent(
+                                model=_make_model(),
+                                system_prompt=alpha_system_prompt,
+                                tools=tools,
+                            )(_append_rewrite_instruction(alpha_input, rewrite_instruction))
+                        )
+                    )
+                ),
+            )
+            if not alpha_response:
+                raise ValueError("Alpha agent returned empty response")
+            break
+        except Exception as e:
+            logger.warning(f"Round {round_num + 1} alpha attempt {attempt + 1} failed: {type(e).__name__}: {e}")
+            if not _is_retryable(e):
+                logger.error(f"Round {round_num + 1} alpha hit non-retryable error, skipping: {e}")
+                break
+            if attempt < MAX_RETRIES - 1:
+                delay = _backoff_with_jitter(attempt)
+                logger.info(f"Retrying round {round_num + 1} alpha in {delay:.1f}s...")
+                time.sleep(delay)
+
+    alpha_failed = not alpha_response
+    if alpha_failed:
+        alpha_response = "This perspective could not be generated. The AI service may be temporarily unavailable."
+
+    yield ("alpha", alpha_response)
+
+    beta_response = ""
+    if not alpha_failed:
+        beta_system_prompt = _build_round_system_prompt(
+            build_beta_prompt(user_ctx, round_info, beta_persona),
+            user_ctx,
+            round_info,
+            round_num,
+            "Beta",
+        )
+        beta_input = _build_runtime_wrapper_prompt(
+            debate_summary=debate_summary,
+            interjection=interjection,
+            path=path_b,
+            timeline=timeline,
+            prev_response=alpha_response,
+            chronology_guardrail=chronology_guardrail,
+        )
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                beta_response = _generate_with_guardrails(
+                    user_ctx=user_ctx,
+                    transcript=transcript,
+                    extra_prior_texts=[alpha_response],
+                    content_kind="round",
+                    stage_label=f"round_{round_num + 1}.beta",
+                    fallback_text=_build_round_fallback_text(path_b, timeline, user_ctx.get("_category", "")),
+                    generator=lambda rewrite_instruction: validate_safe_content(
+                        validate_agent_output(
+                            _safe_agent_output(
+                                Agent(
+                                    model=_make_model(),
+                                    system_prompt=beta_system_prompt,
+                                    tools=tools,
+                                )(_append_rewrite_instruction(beta_input, rewrite_instruction))
+                            )
+                        )
+                    ),
+                )
+                if not beta_response:
+                    raise ValueError("Beta agent returned empty response")
+                break
+            except Exception as e:
+                logger.warning(f"Round {round_num + 1} beta attempt {attempt + 1} failed: {type(e).__name__}: {e}")
+                if not _is_retryable(e):
+                    logger.error(f"Round {round_num + 1} beta hit non-retryable error, skipping: {e}")
+                    break
+                if attempt < MAX_RETRIES - 1:
+                    delay = _backoff_with_jitter(attempt)
+                    logger.info(f"Retrying round {round_num + 1} beta in {delay:.1f}s...")
+                    time.sleep(delay)
+
+    beta_failed = not beta_response
+    if beta_failed:
+        beta_response = "This perspective could not be generated. The AI service may be temporarily unavailable."
+
+    yield ("beta", beta_response)
+
+    status = "completed" if (not alpha_failed and not beta_failed) else "partial"
+    metrics = None
+    sentiment = None
+    if status == "completed":
+        debate_text = f"Path A argued:\n{alpha_response}\n\nPath B argued:\n{beta_response}"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            metrics_future = pool.submit(extract_metrics, debate_text)
+            sentiment_future = pool.submit(analyze_round_sentiment, alpha_response, beta_response)
+            metrics = metrics_future.result()
+            sentiment = sentiment_future.result()
+        _log_debug_round_trace(round_num + 1, round_info["name"], alpha_response, beta_response)
+
+    result = RoundResult(
+        round_number=round_num + 1,
+        round_name=round_info["name"],
+        round_title=round_info["title"],
+        alpha=alpha_response,
+        beta=beta_response,
+        metrics=metrics,
+        sentiment=sentiment,
+        status=status,
+    )
+    yield ("result", result)
+
+
 def _stream_single_round(
     round_index: int,
     round_info: dict,
@@ -1096,7 +1293,8 @@ def _stream_single_round(
         "round_title": round_info["title"],
     }
 
-    result = _run_round(
+    result: RoundResult | None = None
+    for phase, payload in _run_round_split(
         round_info,
         user_context,
         prev_beta,
@@ -1107,27 +1305,31 @@ def _stream_single_round(
         alpha_persona,
         beta_persona,
         interjection=interjection,
-    )
+    ):
+        if phase == "alpha":
+            if payload:
+                for event in _iter_stream_events_for_text(
+                    payload,
+                    event_type="token",
+                    agent="alpha",
+                    round_num=i + 1,
+                ):
+                    yield event
+            yield {"type": "agent_done", "agent": "alpha", "round": i + 1}
+        elif phase == "beta":
+            if payload:
+                for event in _iter_stream_events_for_text(
+                    payload,
+                    event_type="token",
+                    agent="beta",
+                    round_num=i + 1,
+                ):
+                    yield event
+            yield {"type": "agent_done", "agent": "beta", "round": i + 1}
+        elif phase == "result":
+            result = payload
 
-    if result.alpha:
-        for event in _iter_stream_events_for_text(
-            result.alpha,
-            event_type="token",
-            agent="alpha",
-            round_num=i + 1,
-        ):
-            yield event
-    yield {"type": "agent_done", "agent": "alpha", "round": i + 1}
-
-    if result.beta:
-        for event in _iter_stream_events_for_text(
-            result.beta,
-            event_type="token",
-            agent="beta",
-            round_num=i + 1,
-        ):
-            yield event
-    yield {"type": "agent_done", "agent": "beta", "round": i + 1}
+    assert result is not None
 
     updated_summary = debate_summary
     if result.status == "completed":

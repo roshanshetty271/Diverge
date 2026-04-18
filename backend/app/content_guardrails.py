@@ -36,6 +36,33 @@ MOTIF_PATTERNS: dict[str, re.Pattern[str]] = {
     "weight_in_my_chest": re.compile(r"\bweight in my chest\b", re.IGNORECASE),
 }
 
+MOTIF_REPLACEMENTS: dict[str, tuple[tuple[re.Pattern[str], str], ...]] = {
+    "coffee": (
+        (re.compile(r"\bcoffee shop\b", re.IGNORECASE), "quiet corner"),
+        (re.compile(r"\bcoffeehouse\b", re.IGNORECASE), "quiet corner"),
+        (re.compile(r"\bcaf(?:e|\u00e9)\b", re.IGNORECASE), "quiet corner"),
+        (re.compile(r"\bcoffee\b", re.IGNORECASE), "warm drink"),
+    ),
+    "sunlit_room": (
+        (re.compile(r"\bsunlit kitchen\b", re.IGNORECASE), "familiar kitchen"),
+        (re.compile(r"\bsunlight streaming\b", re.IGNORECASE), "light coming through"),
+        (re.compile(r"\bsunlight pours?\b", re.IGNORECASE), "light settles"),
+        (re.compile(r"\bsunlight filtering\b", re.IGNORECASE), "light moving"),
+    ),
+    "buzzing_office": (
+        (re.compile(r"\bbuzz(?:ing)? of (?:voices|ideas|coworkers|excited voices)\b", re.IGNORECASE), "office noise around me"),
+    ),
+    "racing_heart": (
+        (re.compile(r"\bheart races\b", re.IGNORECASE), "my chest tightens"),
+        (re.compile(r"\bheart racing\b", re.IGNORECASE), "my chest tightening"),
+        (re.compile(r"\bpulse races\b", re.IGNORECASE), "my pulse kicks up"),
+        (re.compile(r"\bpulse racing\b", re.IGNORECASE), "my pulse kicking up"),
+    ),
+    "weight_in_my_chest": (
+        (re.compile(r"\bweight in my chest\b", re.IGNORECASE), "tension sitting in me"),
+    ),
+}
+
 MONEY_PATTERN = re.compile(r"(?:\$ ?\d[\d,]*(?:\.\d+)?(?:\s?[kKmM])?|\b\d+(?:\.\d+)?\s?(?:k|K|million|thousand)\b)")
 LOCATION_PATTERN = re.compile(r"\b(?:in|to|from|near|outside|across)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b")
 
@@ -103,6 +130,28 @@ class ValidationResult:
     @property
     def is_valid(self) -> bool:
         return not self.violations
+
+
+def extract_repeated_motif_names(result: ValidationResult) -> list[str]:
+    motifs: list[str] = []
+    for violation in result.violations:
+        if violation.code != "repeated_motif":
+            continue
+        match = re.search(r'"([^"]+)"', violation.detail)
+        if match:
+            motif = match.group(1)
+            if motif not in motifs:
+                motifs.append(motif)
+    return motifs
+
+
+def scrub_repeated_motifs(text: str, result: ValidationResult) -> str:
+    updated = text
+    for motif in extract_repeated_motif_names(result):
+        for pattern, replacement in MOTIF_REPLACEMENTS.get(motif, ()):
+            updated = pattern.sub(replacement, updated)
+    updated = re.sub(r" {2,}", " ", updated)
+    return updated.strip()
 
 
 def _collect_context_text(user_ctx: dict, prior_texts: list[str] | None = None) -> str:
@@ -255,9 +304,16 @@ def format_violation_report(result: ValidationResult) -> str:
     if result.is_valid:
         return ""
     bullets = "\n".join(f"- {violation.detail}" for violation in result.violations[:8])
+    repeated_motifs = extract_repeated_motif_names(result)
+    motif_line = (
+        f'- Absolutely do not mention these motifs again: {", ".join(repeated_motifs)}.\n'
+        if repeated_motifs
+        else ""
+    )
     return (
         "Your previous draft violated the grounding/style rules. Rewrite from scratch and fix ALL of this:\n"
         f"{bullets}\n"
+        f"{motif_line}"
         "- Keep the scene grounded and generic when context is sparse.\n"
         "- Do not add new people, places, money outcomes, or property details.\n"
         "- Do not use aggressive opener phrases or familiar coffee/sunlight cliches."

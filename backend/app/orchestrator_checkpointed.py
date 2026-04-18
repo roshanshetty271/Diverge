@@ -1,6 +1,7 @@
 """Checkpointed debate orchestration that pauses after each round."""
 
 import logging
+import threading
 import uuid
 
 from app.agents.prompts import detect_decision_category, get_rounds
@@ -63,6 +64,32 @@ def _append_round_summary(debate_summary: str, round_number: int, round_name: st
     return updated
 
 
+def _session_to_response(debate_id: str, session: dict) -> CheckpointedDebateResponse:
+    """Normalize a stored checkpointed session into the API response shape."""
+    transcript = _deserialize_transcript(session.get("transcript", []))
+    metrics = _deserialize_metrics(session.get("metrics", []))
+    total_rounds = int(session.get("total_rounds", len(transcript) or 5))
+    current_round_index = int(session.get("current_round_index", len(transcript)))
+    status = session.get("status", "paused")
+
+    next_round_number = None
+    if status == "paused" and current_round_index < total_rounds:
+        next_round_number = current_round_index + 1
+
+    return CheckpointedDebateResponse(
+        status=status,
+        debate_id=debate_id,
+        transcript=transcript,
+        verdict=session.get("verdict", ""),
+        timeline=session.get("timeline"),
+        metrics=metrics,
+        completed_rounds=len([r for r in transcript if r.status == "completed"]),
+        total_rounds=total_rounds,
+        resources=session.get("resources", []),
+        next_round_number=next_round_number,
+    )
+
+
 def _build_partial_verdict(transcript: list[RoundResult], user_context: dict, total_rounds: int) -> str:
     completed = [r for r in transcript if r.status == "completed"]
     if len(completed) >= 3:
@@ -74,6 +101,54 @@ def _build_partial_verdict(transcript: list[RoundResult], user_context: dict, to
             "Here's a partial analysis based on the available rounds."
         )
     return "The debate could not be completed. Please try again."
+
+
+def _finalize_checkpointed_session_bundle(
+    debate_id: str,
+    transcript: list[RoundResult],
+    metrics: list[RoundMetrics | None],
+    debate_summary: str,
+    prev_beta: str | None,
+    user_context: dict,
+    total_rounds: int,
+) -> None:
+    """Finish verdict/timeline/resource generation after the final round without blocking SSE."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    completed_rounds = len([r for r in transcript if r.status == "completed"])
+
+    try:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            verdict_future = pool.submit(_build_partial_verdict, transcript, user_context, total_rounds)
+            timeline_future = pool.submit(_generate_structured_timeline, transcript, user_context) if completed_rounds >= 3 else None
+            resources_future = pool.submit(lambda: _serialize_models(_get_resources(user_context)))
+            verdict = verdict_future.result()
+            timeline = timeline_future.result() if timeline_future else None
+            resources = resources_future.result()
+    except Exception:
+        logger.exception("Async checkpointed finalization failed for debate_id=%s", debate_id)
+        try:
+            verdict = _build_partial_verdict(transcript, user_context, total_rounds)
+        except Exception:
+            verdict = "The verdict could not be fully generated. Please try opening this debate again in a moment."
+        timeline = None
+        resources = []
+
+    complete_debate_session(
+        debate_id,
+        {
+            "current_round_index": total_rounds,
+            "transcript": _serialize_models(transcript),
+            "metrics": _serialize_models(metrics),
+            "debate_summary": debate_summary,
+            "prev_beta": prev_beta,
+            "verdict": verdict,
+            "timeline": timeline.model_dump() if timeline else None,
+            "resources": resources,
+            "total_rounds": total_rounds,
+        },
+    )
+    _persist_to_agentcore_memory(debate_id, user_context, transcript, verdict)
 
 
 def start_checkpointed_debate(user_context: dict, user_id: str = "anonymous") -> CheckpointedDebateResponse:
@@ -152,21 +227,10 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
         raise ValueError("Debate session not found.")
 
     if session.get("status") == "complete":
-        transcript = _deserialize_transcript(session.get("transcript", []))
-        metrics = _deserialize_metrics(session.get("metrics", []))
-        resources = session.get("resources", [])
-        return CheckpointedDebateResponse(
-            status="complete",
-            debate_id=debate_id,
-            transcript=transcript,
-            verdict=session.get("verdict", ""),
-            timeline=session.get("timeline"),
-            metrics=metrics,
-            completed_rounds=len([r for r in transcript if r.status == "completed"]),
-            total_rounds=int(session.get("total_rounds", len(transcript))),
-            resources=resources,
-            next_round_number=None,
-        )
+        return _session_to_response(debate_id, session)
+
+    if session.get("status") == "finalizing":
+        return _session_to_response(debate_id, session)
 
     user_context = dict(session.get("input", {}) or {})
     category = session.get("category", "general")
@@ -279,6 +343,85 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
     )
 
 
+def start_checkpointed_streaming(user_context: dict, user_id: str = "anonymous"):
+    """Generator that streams the first round of a checkpointed debate via SSE events.
+
+    Yields the same event types as continue_checkpointed_streaming():
+      debate_start, round_start, token, agent_done, round_complete, session_update.
+
+    After Round 1 completes, persists the session as paused and yields session_update.
+    """
+    debate_id = str(uuid.uuid4())
+    category = detect_decision_category(
+        user_context["path_a"],
+        user_context["path_b"],
+        constraints=user_context.get("constraints"),
+        writing_samples=user_context.get("writing_samples"),
+        template_id=user_context.get("template_id"),
+    )
+    rounds = get_rounds(category)
+    tools = TOOL_MAP.get(category, [research_insight])
+    alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
+
+    enriched_context = {
+        **user_context,
+        "_category": category,
+        "debate_id": debate_id,
+        "user_id": user_id,
+    }
+
+    yield {
+        "type": "debate_start",
+        "debate_id": debate_id,
+        "total_rounds": len(rounds),
+    }
+
+    result, debate_summary = yield from _stream_single_round(
+        round_index=0,
+        round_info=rounds[0],
+        user_context=enriched_context,
+        transcript=[],
+        prev_beta=None,
+        debate_summary="",
+        interjection=None,
+        tools=tools,
+        alpha_persona=alpha_persona,
+        beta_persona=beta_persona,
+    )
+
+    transcript = [result]
+    metrics: list[RoundMetrics | None] = [result.metrics]
+    prev_beta = result.beta if result.status == "completed" else None
+
+    create_debate_session(
+        debate_id=debate_id,
+        user_id=user_id,
+        user_input=enriched_context,
+        session_data={
+            "status": "paused",
+            "current_round_index": 1,
+            "transcript": _serialize_models(transcript),
+            "metrics": _serialize_models(metrics),
+            "debate_summary": debate_summary,
+            "prev_beta": prev_beta,
+            "category": category,
+            "alpha_persona_label": alpha_persona["label"],
+            "beta_persona_label": beta_persona["label"],
+            "total_rounds": len(rounds),
+        },
+    )
+
+    completed_rounds = len([r for r in transcript if r.status == "completed"])
+    yield {
+        "type": "session_update",
+        "status": "paused",
+        "debate_id": debate_id,
+        "completed_rounds": completed_rounds,
+        "total_rounds": len(rounds),
+        "next_round_number": 2 if len(rounds) > 1 else None,
+    }
+
+
 def continue_checkpointed_streaming(debate_id: str, interjection: str | None = None):
     """Generator that streams one round of a checkpointed debate via SSE events.
 
@@ -337,42 +480,44 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
     completed_rounds = len([r for r in transcript if r.status == "completed"])
 
     if next_round_index >= len(rounds):
-        # Final round — generate verdict, timeline, resources in parallel
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            verdict_future = pool.submit(_build_partial_verdict, transcript, user_context, len(rounds))
-            timeline_future = pool.submit(_generate_structured_timeline, transcript, user_context) if completed_rounds >= 3 else None
-            resources_future = pool.submit(lambda: _serialize_models(_get_resources(user_context)))
-            verdict = verdict_future.result()
-            timeline = timeline_future.result() if timeline_future else None
-            resources = resources_future.result()
-
-        complete_debate_session(
+        update_debate_session(
             debate_id,
             {
+                "status": "finalizing",
                 "current_round_index": next_round_index,
                 "transcript": _serialize_models(transcript),
                 "metrics": _serialize_models(metrics),
                 "debate_summary": debate_summary,
                 "prev_beta": prev_beta,
-                "verdict": verdict,
-                "timeline": timeline.model_dump() if timeline else None,
-                "resources": resources,
+                "verdict": "",
+                "timeline": None,
+                "resources": [],
                 "total_rounds": len(rounds),
             },
         )
-        _persist_to_agentcore_memory(debate_id, user_context, transcript, verdict)
+
+        threading.Thread(
+            target=_finalize_checkpointed_session_bundle,
+            args=(
+                debate_id,
+                transcript,
+                metrics,
+                debate_summary,
+                prev_beta,
+                user_context,
+                len(rounds),
+            ),
+            daemon=True,
+        ).start()
 
         yield {
-            "type": "complete",
-            "verdict": verdict,
-            "timeline": timeline.model_dump() if timeline else None,
+            "type": "session_update",
+            "status": "finalizing",
             "debate_id": debate_id,
-            "metrics": [m.model_dump() if m else None for m in metrics],
             "completed_rounds": completed_rounds,
             "total_rounds": len(rounds),
-            "resources": resources,
+            "next_round_number": None,
+            "verdict_ready": False,
         }
     else:
         # Non-final round — save and pause

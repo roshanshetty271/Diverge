@@ -24,6 +24,14 @@ const CHART_TABS = [
 ] as const;
 type ChartTab = (typeof CHART_TABS)[number]["key"];
 
+const ROUND_TIMEFRAMES: Record<number, string> = {
+  1: "One year from today",
+  2: "Two to three years forward",
+  3: "Five years from today",
+  4: "A decade from today",
+  5: "Final words",
+};
+
 export default function Debate() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -36,19 +44,20 @@ export default function Debate() {
   const stored = !locationState.debate && !usingStreamState ? loadDebateState() : null;
 
   const [, forceUpdate] = useState(0);
+  const [awaitingStream, setAwaitingStream] = useState(false);
   const [currentRound, setCurrentRound] = useState(1);
   const [activeChart, setActiveChart] = useState<ChartTab>("Radar");
-  const [visibleMessages, setVisibleMessages] = useState(0);
-  const [skipped, setSkipped] = useState(false);
   const [interjectionText, setInterjectionText] = useState("");
   const [interjectionSent, setInterjectionSent] = useState<Record<number, boolean>>({});
   const [continuingCheckpointed, setContinuingCheckpointed] = useState(false);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [roundTransition, setRoundTransition] = useState(false);
   const [transitionLabel, setTransitionLabel] = useState({ name: "", title: "" });
+  const [skipRoundAnimation, setSkipRoundAnimation] = useState(false);
   const prevCompletedRef = useRef(
     locationState.debate?.completed_rounds || stored?.debate?.completed_rounds || stream.completedRounds || 0,
   );
+  const seenRoundsRef = useRef<Set<number>>(new Set());
 
   const transcript: RoundResult[] = usingStreamState ? stream.rounds : (locationState.debate?.transcript || stored?.debate?.transcript || []);
   const input: DecisionInput | undefined | null = usingStreamState ? stream.input : (locationState.input || stored?.input);
@@ -79,17 +88,67 @@ export default function Debate() {
   const userName = input?.user_name || null;
   const [voiceA, voiceB] = getVoicePair(userName);
 
+  // Clamp the visible round before deriving any round-specific content.
+  const highestAvailableRound = Math.max(
+    transcript.length,
+    usingStreamState && stream.streamingRound > 0 ? stream.streamingRound : 0,
+    awaitingStream ? transcript.length + 1 : 0,
+    1,
+  );
+  const safeRound = Math.max(1, Math.min(currentRound, highestAvailableRound));
+
   // Stream-backed content can remain visible after the active SSE request closes.
-  const isCurrentRoundFromStream = usingStreamState && stream.streamingRound === currentRound;
-  const alphaIsStreaming = isActivelyStreaming && isCurrentRoundFromStream && stream.streamingAgent === "alpha";
-  const betaIsStreaming = isActivelyStreaming && isCurrentRoundFromStream && stream.streamingAgent === "beta";
-  const hasStreamingAlpha = isCurrentRoundFromStream && stream.streamingAlphaText.length > 0;
-  const hasStreamingBeta = isCurrentRoundFromStream && stream.streamingBetaText.length > 0;
+  const isCurrentRoundFromStream = usingStreamState && stream.streamingRound === safeRound;
+  const completedRound = transcript[safeRound - 1];
+  const hasCompletedRound = completedRound != null;
+  const isWaitingForStream = awaitingStream && !isCurrentRoundFromStream && !hasCompletedRound;
+  const alphaText = hasCompletedRound
+    ? completedRound.alpha
+    : (isCurrentRoundFromStream ? stream.streamingAlphaText : "");
+  const betaText = hasCompletedRound
+    ? completedRound.beta
+    : (isCurrentRoundFromStream ? stream.streamingBetaText : "");
+  const alphaBackendStreaming = isCurrentRoundFromStream && !hasCompletedRound && !stream.streamingAlphaDone;
+  const betaBackendStreaming =
+    isCurrentRoundFromStream &&
+    !hasCompletedRound &&
+    stream.streamingAlphaDone &&
+    !stream.streamingBetaDone;
+
+  // Reveal phase state machine: controls the staggered Alpha â†’ Beta â†’ done sequence
+  // 'waiting'  = round just changed, content area hidden behind transition overlay
+  // 'alpha'    = Alpha's bubble visible, typewriter is actively revealing Alpha's text
+  // 'beta'     = Alpha fully revealed, Beta's bubble now visible with typewriter
+  // 'done'     = Both messages fully revealed, charts + buttons appear
+  type RevealPhase = 'waiting' | 'alpha' | 'beta' | 'done';
+  // When entering a fresh live stream, start in 'alpha' so the initial render doesn't
+  // briefly mount both bubbles before the safeRound effect corrects revealPhase (which
+  // was causing Round 1 to "dump" both bubbles at once).
+  const [revealPhase, setRevealPhase] = useState<RevealPhase>(() => {
+    const s = getDebateStream();
+    return s.usingStreamState && !s.done ? 'alpha' : 'done';
+  });
+
+  // When Alpha's typewriter finishes â†’ show Beta
+  const handleAlphaRevealComplete = useCallback(() => {
+    setRevealPhase((prev) => prev === 'alpha' ? 'beta' : prev);
+  }, []);
+
+  // When Beta's typewriter finishes â†’ show charts + buttons
+  const handleBetaRevealComplete = useCallback(() => {
+    setRevealPhase((prev) => prev === 'beta' ? 'done' : prev);
+  }, []);
+
 
   useEffect(() => {
     const unsub = subscribeDebate(() => {
       forceUpdate((c) => c + 1);
       const s = getDebateStream();
+
+      // Clear awaiting state once the stream catches up to the current round
+      if (s.streamingRound >= currentRound && awaitingStream) {
+        setAwaitingStream(false);
+      }
 
       // Auto-advance to the streaming round (works for both initial and continue)
       if (s.streamingRound > currentRound) {
@@ -133,39 +192,32 @@ export default function Debate() {
       }
     });
     return unsub;
-  }, [currentRound]);
-
-  const revealAll = useCallback(() => {
-    setVisibleMessages(2);
-    setSkipped(true);
-  }, []);
+  }, [currentRound, awaitingStream]);
 
   const goToRound = useCallback((round: number) => {
     if (round === currentRound) return;
     const name = ROUNDS[round - 1]?.name || `Round ${round}`;
-    const title = ROUNDS[round - 1]?.title || "";
+    const title = ROUND_TIMEFRAMES[round] || ROUNDS[round - 1]?.title || "";
     setTransitionLabel({ name, title });
     setRoundTransition(true);
-    setTimeout(() => {
-      setCurrentRound(round);
-      setRoundTransition(false);
-    }, 1000);
+    setTimeout(() => setCurrentRound(round), 400);
+    setTimeout(() => setRoundTransition(false), 900);
   }, [currentRound]);
 
-  // For non-streaming mode, reveal messages with a delay
   useEffect(() => {
-    if (isCurrentRoundFromStream) {
-      setVisibleMessages(2);
-      setSkipped(true);
-      return;
-    }
-    setVisibleMessages(0);
-    setSkipped(false);
+    const hasSeenRound = seenRoundsRef.current.has(safeRound);
+    seenRoundsRef.current.add(safeRound);
+    setSkipRoundAnimation(hasSeenRound);
+    setRevealPhase(hasSeenRound ? 'done' : 'alpha');
     stopSpeaking();
-    const t1 = setTimeout(() => setVisibleMessages(1), 500);
-    const t2 = setTimeout(() => setVisibleMessages(2), 2500);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [currentRound, isCurrentRoundFromStream]);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [safeRound]);
+
+  useEffect(() => {
+    if (verdictReady) {
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }, [verdictReady]);
 
   useEffect(() => {
     return () => stopSpeaking();
@@ -188,20 +240,12 @@ export default function Debate() {
   }, []);
 
   // Determine what to show for the current round
-  const completedRound = transcript[currentRound - 1];
-  const hasCompletedRound = !!completedRound;
+
+  // "Waiting for stream" â€” user clicked Continue, view advanced, but no tokens yet
 
   // Use streaming text if we're on the active streaming round, otherwise use completed text
-  const alphaText = hasCompletedRound
-    ? completedRound.alpha
-    : (isCurrentRoundFromStream ? stream.streamingAlphaText : "");
-  const betaText = hasCompletedRound
-    ? completedRound.beta
-    : (isCurrentRoundFromStream ? stream.streamingBetaText : "");
 
   // Show alpha as soon as streaming or completed text exists
-  const showAlpha = alphaText.length > 0 || alphaIsStreaming;
-  const showBeta = betaText.length > 0 || betaIsStreaming;
 
   if (!usingStreamState && transcript.length === 0) {
     return (
@@ -218,13 +262,6 @@ export default function Debate() {
     return { round_number: i + 1, round_name: ROUNDS[i]?.name || `Round ${i + 1}`, round_title: ROUNDS[i]?.title || "", alpha: "", beta: "", metrics: null, status: "pending" as const };
   });
 
-  // The highest round the user can navigate to: completed rounds + the currently streaming round
-  const highestAvailableRound = Math.max(
-    transcript.length,
-    usingStreamState && stream.streamingRound > 0 ? stream.streamingRound : 0,
-    1,
-  );
-  const safeRound = Math.max(1, Math.min(currentRound, highestAvailableRound));
   const round = completedRound;
   const roundName = round?.round_name || ROUNDS[safeRound - 1]?.name || `Round ${safeRound}`;
   const roundTitle = round?.round_title || ROUNDS[safeRound - 1]?.title || "";
@@ -249,19 +286,35 @@ export default function Debate() {
 
   const heading = userName ? `${userName}\u2019s Decision` : "The Debate";
 
-  // Has the user seen all content for this round?
-  const bothDone = hasCompletedRound || (showAlpha && showBeta && !alphaIsStreaming && !betaIsStreaming && hasStreamingAlpha && hasStreamingBeta);
+  // Reveal-phase-based conditions
+  const roundDone = revealPhase === 'done';
+  const isCheckpointedFinalRound =
+    CHECKPOINTED_DEBATE_ENABLED &&
+    safeRound === totalRoundsToShow &&
+    transcript.length === totalRoundsToShow &&
+    roundDone;
   // Is the next round already available (completed or streaming)?
   const nextRoundAvailable = safeRound < transcript.length || (isActivelyStreaming && stream.streamingRound > safeRound);
   // Is the next round still being generated (not yet started)?
   const nextRoundGenerating = isActivelyStreaming && !stream.done && safeRound >= transcript.length && stream.streamingRound <= safeRound && !isCurrentRoundFromStream;
-  const canGoVerdict = safeRound >= transcript.length && verdictReady && !!debate?.verdict;
+  const canGoVerdict = safeRound >= transcript.length && (verdictReady || isCheckpointedFinalRound) && !!debate;
   const canContinueCheckpointed =
     isCheckpointedMode &&
     safeRound === transcript.length &&
-    visibleMessages >= 2 &&
+    roundDone &&
     !continuingCheckpointed &&
     !stream.streamingContinue;
+  const canInterjectLatestRound =
+    !CHECKPOINTED_DEBATE_ENABLED &&
+    usingStreamState &&
+    !stream.done &&
+    roundDone &&
+    hasCompletedRound &&
+    safeRound < 5 &&
+    safeRound === transcript.length &&
+    !nextRoundAvailable &&
+    !nextRoundGenerating &&
+    !interjectionSent[safeRound];
 
   const handleCheckpointedContinue = async () => {
     if (!debate || !input || continuingCheckpointed || isActivelyStreaming) return;
@@ -273,6 +326,12 @@ export default function Debate() {
       addInterjection(interjectionRound, interjection);
       setInterjectionSent((prev) => ({ ...prev, [interjectionRound]: true }));
     }
+
+    // Immediately advance to the next round's view â€” don't wait for the stream
+    const nextRoundNum = transcript.length + 1;
+    setAwaitingStream(true);
+    goToRound(nextRoundNum);
+
     setContinuingCheckpointed(true);
     try {
       await continueDebateStream(
@@ -284,8 +343,11 @@ export default function Debate() {
       );
     } catch (err) {
       toast(err instanceof Error ? err.message : "Couldn't continue the debate.");
+      // If streaming fails, go back to the last completed round
+      goToRound(transcript.length);
     } finally {
       setContinuingCheckpointed(false);
+      setAwaitingStream(false);
     }
   };
 
@@ -295,7 +357,7 @@ export default function Debate() {
 
         <p className="text-center text-ivory-faint text-xs font-mono uppercase tracking-widest mb-1">{heading}</p>
 
-        {/* Step indicator — always shows all rounds */}
+        {/* Step indicator â€” always shows all rounds */}
         <div className="flex justify-center items-center gap-1 mb-8">
           {displayRounds.map((r, i) => {
             const stepNum = i + 1;
@@ -331,7 +393,7 @@ export default function Debate() {
         <div className="text-center mb-8">
           <p className="text-ivory-faint text-xs font-mono uppercase tracking-widest">Round {safeRound} of {debate?.total_rounds || stream.totalRounds || 5}</p>
           <h1 className="font-display text-2xl md:text-3xl text-ivory mt-1" style={{ fontWeight: 400 }}>{roundName}</h1>
-          <p className="text-ivory-dim text-sm mt-1">{roundTitle}</p>
+          <p className="text-ivory-dim text-sm mt-1">{ROUND_TIMEFRAMES[safeRound] || roundTitle}</p>
           {round?.status === "partial" && <p className="text-path-risk text-xs mt-2 font-mono">This round was only partially generated</p>}
         </div>
 
@@ -349,7 +411,7 @@ export default function Debate() {
                 <motion.h2
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.15, duration: 0.4 }}
+                  transition={{ delay: 0.05, duration: 0.25 }}
                   className="font-display text-3xl md:text-4xl text-ivory"
                   style={{ fontWeight: 400 }}
                 >
@@ -359,7 +421,7 @@ export default function Debate() {
                   <motion.p
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    transition={{ delay: 0.4, duration: 0.4 }}
+                    transition={{ delay: 0.2, duration: 0.25 }}
                     className="text-ivory-faint text-sm mt-2"
                   >
                     {transitionLabel.title}
@@ -370,52 +432,40 @@ export default function Debate() {
           )}
         </AnimatePresence>
 
-        {/* Chat bubbles */}
+        {/* Chat bubbles â€” driven by revealPhase state machine */}
         <AnimatePresence mode="wait">
           <motion.div key={safeRound} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }} className="space-y-5">
-            {(isCurrentRoundFromStream ? showAlpha : visibleMessages >= 1) && (
+            {/* Alpha: visible during 'alpha', 'beta', 'done' phases (or when waiting for stream) */}
+            {(revealPhase !== 'waiting' || isWaitingForStream) && (alphaText.length > 0 || isWaitingForStream || alphaBackendStreaming) && (
               <AgentMessage
                 agentName={safeLabel}
                 message={alphaText}
                 variant="safe"
                 voiceId={voiceA}
-                streaming={alphaIsStreaming}
+                streaming={isWaitingForStream || alphaBackendStreaming}
+                instant={skipRoundAnimation}
                 ttsEnabled={capabilities?.tts ?? false}
+                onRevealComplete={handleAlphaRevealComplete}
               />
             )}
-            {(isCurrentRoundFromStream ? showBeta : visibleMessages >= 2) && (
+            {/* Beta: appears only after Alpha's typewriter finishes */}
+            {(revealPhase === 'beta' || revealPhase === 'done') && (betaText.length > 0 || betaBackendStreaming) && (
               <AgentMessage
                 agentName={riskLabel}
                 message={betaText}
                 variant="risk"
                 voiceId={voiceB}
-                streaming={betaIsStreaming}
+                streaming={betaBackendStreaming}
+                instant={skipRoundAnimation}
                 ttsEnabled={capabilities?.tts ?? false}
+                onRevealComplete={handleBetaRevealComplete}
               />
             )}
           </motion.div>
         </AnimatePresence>
 
-        {/* Skip button (only for non-streaming completed rounds) */}
-        {!isCurrentRoundFromStream && visibleMessages < 2 && !skipped && transcript.length > 0 && (
-          <div className="mt-4 text-center">
-            <button onClick={revealAll} className="text-ivory-faint text-xs font-mono hover:text-ivory-dim transition-colors cursor-pointer">
-              Skip &rarr;
-            </button>
-          </div>
-        )}
-
-        {/* Streaming indicator */}
-        {isCurrentRoundFromStream && (alphaIsStreaming || betaIsStreaming) && (
-          <div className="mt-4 text-center">
-            <p className="text-ivory-faint text-xs font-mono animate-pulse">
-              {alphaIsStreaming ? `${safeLabel} is arguing\u2026` : `${riskLabel} is responding\u2026`}
-            </p>
-          </div>
-        )}
-
-        {/* User interjection input — shown between rounds when streaming */}
-        {!CHECKPOINTED_DEBATE_ENABLED && usingStreamState && !stream.done && bothDone && !alphaIsStreaming && !betaIsStreaming && hasCompletedRound && safeRound < 5 && !interjectionSent[safeRound] && (
+        {/* User interjection input â€” shown between rounds when streaming (non-checkpointed mode) */}
+        {canInterjectLatestRound && (
           <div className="mt-6">
             <div className="max-w-md mx-auto">
               <div className="flex gap-2">
@@ -475,7 +525,8 @@ export default function Debate() {
           </motion.div>
         )}
 
-        {isCheckpointedMode && safeRound === transcript.length && visibleMessages >= 2 && (
+        {/* Checkpointed continue â€” interjection input + continue button */}
+        {isCheckpointedMode && safeRound === transcript.length && roundDone && (
           <div className="mt-8">
             <div className="max-w-2xl mx-auto">
               <p className="text-gray-400 text-sm text-center mb-3">
@@ -496,13 +547,11 @@ export default function Debate() {
                   className="flex-1 bg-surface border border-surface-light rounded-lg px-4 py-3 text-ivory text-sm focus:border-ivory-dim focus:outline-none placeholder:text-gray-500 transition-colors duration-200"
                 />
                 <button
-                  onClick={() => {
-                    void handleCheckpointedContinue();
-                  }}
+                  onClick={() => { void handleCheckpointedContinue(); }}
                   disabled={!canContinueCheckpointed}
                   className="px-6 py-3 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none"
                 >
-                  {continuingCheckpointed ? "Continuing..." : "Continue Debate"}
+                  Continue Debate
                 </button>
               </div>
               <p className="text-gray-500 text-xs text-center mt-2">
@@ -513,7 +562,7 @@ export default function Debate() {
         )}
 
         {/* Next / Generating / Verdict button */}
-        {(isCurrentRoundFromStream ? bothDone : visibleMessages >= 2) && !alphaIsStreaming && !betaIsStreaming && (
+        {roundDone && (
           <div className="mt-8 text-center">
             {canGoVerdict ? (
               <button onClick={() => navigate("/verdict", { state: { debate, input } })} className="px-8 py-3 rounded-lg text-sm bg-path-risk text-void font-medium transition-[opacity,box-shadow] duration-200 cursor-pointer hover:shadow-[0_0_20px_rgba(212,168,67,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-path-risk focus-visible:ring-offset-2 focus-visible:ring-offset-void">See the Verdict</button>
@@ -532,7 +581,7 @@ export default function Debate() {
         )}
 
         {/* Charts */}
-        {(isCurrentRoundFromStream ? bothDone : visibleMessages >= 2) && currentMetrics && (
+        {roundDone && currentMetrics && (
           <div className="mt-10">
             <div className="flex gap-1 mb-2">
               {availableChartTabs.map((tab) => (
@@ -555,10 +604,11 @@ export default function Debate() {
         )}
 
         {/* Round navigation */}
-        {(isCurrentRoundFromStream ? bothDone : visibleMessages >= 2) && transcript.length > 1 && (
+        {roundDone && transcript.length > 1 && (
           <div className="mt-8"><RoundNav totalRounds={transcript.length} currentRound={safeRound} completedRounds={completedRoundsArr} onRoundClick={goToRound} /></div>
         )}
       </div>
     </div>
   );
 }
+

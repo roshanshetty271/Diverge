@@ -91,6 +91,10 @@ export default function App() {
   const location = useLocation();
   const showNavbar = !HIDE_NAVBAR_PATHS.includes(location.pathname);
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [location.pathname]);
+
   return (
     <ErrorBoundary>
       <div className="min-h-screen bg-void text-ivory font-body">

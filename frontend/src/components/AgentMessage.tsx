@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
-import AgentAvatar from "./AgentAvatar";
 import { speak, stopSpeaking, onSpeakingStopped } from "../utils/tts";
 
 interface Props {
@@ -9,11 +8,10 @@ interface Props {
   variant?: "safe" | "risk";
   voiceId?: string;
   streaming?: boolean;
+  instant?: boolean;
   ttsEnabled?: boolean;
+  onRevealComplete?: () => void;
 }
-
-const CHARS_PER_TICK = 3;
-const TICK_MS = 16;
 
 const SLOP_OPENERS = /^\s*(?:Here's the thing[:\s—–-]*|The (?:uncomfortable |honest |real )?truth is[,:\s—–-]*|Let me be (?:clear|honest|real)[.:\s—–-]*|I'll be honest[,:\s—–-]*|Make no mistake[,:\s—–-]*|Picture this[.:\s—–-]*|Imagine this[.:\s—–-]*|Look[,:\s]+|Listen[,:\s]+)/i;
 const SLOP_INLINE = [
@@ -34,47 +32,76 @@ function cleanSlop(text: string): string {
   return t.replace(/ {2,}/g, " ").trim();
 }
 
-export default function AgentMessage({ agentName, message, variant = "safe", voiceId, streaming, ttsEnabled = true }: Props) {
+function extractParagraphs(text: string): string[] {
+  if (!text) return [];
+  return text.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
+}
+
+export default function AgentMessage({
+  agentName,
+  message,
+  variant = "safe",
+  voiceId,
+  streaming,
+  instant = false,
+  ttsEnabled = true,
+  onRevealComplete,
+}: Props) {
   const isSafe = variant === "safe";
   const accentText = isSafe ? "text-path-safe" : "text-path-risk";
-  const borderClass = isSafe ? "border-l-2 border-r-0 border-l-path-safe" : "border-l-0 border-r-2 border-r-path-risk";
   const [speaking, setSpeaking] = useState(false);
   const cleaned = cleanSlop(message);
 
-  const [revealedLen, setRevealedLen] = useState(streaming ? 0 : cleaned.length);
-  const targetLen = useRef(cleaned.length);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const onRevealCompleteRef = useRef(onRevealComplete);
+  onRevealCompleteRef.current = onRevealComplete;
+  const hasFiredComplete = useRef(false);
+  const bubbleStartedAtRef = useRef(Date.now());
+
+  const incomingParagraphs = extractParagraphs(cleaned);
+  const FIRST_MESSAGE_HOLD_MS = 1200;
+  const FOLLOWUP_MESSAGE_HOLD_MS = 2300;
+  const [revealedCount, setRevealedCount] = useState(instant ? incomingParagraphs.length : 0);
 
   useEffect(() => {
-    if (!streaming) {
-      setRevealedLen(cleaned.length);
-      targetLen.current = cleaned.length;
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (instant) {
+      setRevealedCount(incomingParagraphs.length);
       return;
     }
+    if (incomingParagraphs.length <= revealedCount) return;
 
-    targetLen.current = cleaned.length;
+    const holdMs = revealedCount === 0 ? FIRST_MESSAGE_HOLD_MS : FOLLOWUP_MESSAGE_HOLD_MS;
+    const elapsed = Date.now() - bubbleStartedAtRef.current;
+    const remaining = Math.max(holdMs - elapsed, 0);
+    const t = setTimeout(() => {
+      bubbleStartedAtRef.current = Date.now();
+      setRevealedCount((prev) => Math.min(prev + 1, incomingParagraphs.length));
+    }, remaining);
+    return () => clearTimeout(t);
+  }, [incomingParagraphs.length, instant, revealedCount]);
 
-    if (!timerRef.current && cleaned.length > 0) {
-      timerRef.current = setInterval(() => {
-        setRevealedLen((prev) => {
-          const next = Math.min(prev + CHARS_PER_TICK, targetLen.current);
-          if (next >= targetLen.current && timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
-          return next;
-        });
-      }, TICK_MS);
+  useEffect(() => {
+    if (instant) {
+      hasFiredComplete.current = false;
+      bubbleStartedAtRef.current = Date.now();
+      return;
     }
+  }, [instant]);
 
-    return () => {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    };
-  }, [streaming, cleaned.length]);
+  const visibleParagraphs = instant
+    ? incomingParagraphs
+    : incomingParagraphs.slice(0, revealedCount);
+  const showTypingIndicator = !instant && (revealedCount === 0 || revealedCount < incomingParagraphs.length);
 
-  const displayText = streaming ? cleaned.slice(0, revealedLen) : cleaned;
-  const isRevealing = streaming && revealedLen < cleaned.length;
+  useEffect(() => {
+    hasFiredComplete.current = false;
+  }, [agentName]);
+
+  useEffect(() => {
+    if (cleaned.length === 0 || streaming || revealedCount < incomingParagraphs.length || hasFiredComplete.current) return;
+    hasFiredComplete.current = true;
+    const t = setTimeout(() => onRevealCompleteRef.current?.(), 50);
+    return () => clearTimeout(t);
+  }, [cleaned.length, incomingParagraphs.length, revealedCount, streaming]);
 
   useEffect(() => onSpeakingStopped(() => setSpeaking(false)), []);
 
@@ -90,9 +117,6 @@ export default function AgentMessage({ agentName, message, variant = "safe", voi
     });
   }, [speaking, message, voiceId, streaming]);
 
-  const showCursor = streaming || isRevealing;
-  const paragraphs = displayText.split("\n\n").filter(Boolean);
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -100,15 +124,20 @@ export default function AgentMessage({ agentName, message, variant = "safe", voi
       transition={{ duration: 0.5, ease: "easeOut" }}
       className={`flex ${isSafe ? "justify-start" : "justify-end"}`}
     >
-      <div className={`max-w-[85%] md:max-w-[75%] flex ${isSafe ? "flex-row" : "flex-row-reverse"} gap-3 items-start`}>
-        <div className="shrink-0 mt-1">
-          <AgentAvatar variant={variant} speaking={speaking || showCursor} />
-        </div>
+      <div className={`max-w-[85%] md:max-w-[75%] relative ${isSafe ? "pl-5" : "pr-5"}`}>
+        <div
+          className={`absolute top-1 bottom-1 w-[3px] rounded-full ${
+            isSafe ? "left-0 bg-path-safe" : "right-0 bg-path-risk"
+          }`}
+          style={{ opacity: 0.75 }}
+        />
 
-        <div className="space-y-2.5">
-          <div className={`flex items-center gap-2 mb-1 ${isSafe ? "" : "justify-end"}`}>
-            <span className={`${accentText} text-xs font-medium font-body`}>{agentName}</span>
-            {ttsEnabled && voiceId && !streaming && (
+        <div className="space-y-3">
+          <div className={`flex items-center gap-2 ${isSafe ? "" : "justify-end"}`}>
+            <span className={`${accentText} text-xs font-medium font-body tracking-wide uppercase`}>
+              {agentName}
+            </span>
+            {ttsEnabled && voiceId && !streaming && visibleParagraphs.length > 0 && cleaned.length > 0 && (
               <button
                 onClick={handleSpeak}
                 className={`${accentText} opacity-60 hover:opacity-100 transition-opacity cursor-pointer`}
@@ -125,30 +154,31 @@ export default function AgentMessage({ agentName, message, variant = "safe", voi
             )}
           </div>
 
-          {paragraphs.length > 0 ? (
-            paragraphs.map((paragraph, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.35, delay: streaming ? 0 : i * 0.12, ease: "easeOut" }}
-                className={`bg-surface rounded-lg px-4 py-3 ${borderClass}`}
-              >
-                <p className="text-ivory text-sm leading-[1.75]">
-                  {paragraph}
-                  {showCursor && i === paragraphs.length - 1 && (
-                    <span className="inline-block w-[2px] h-[1em] bg-current ml-0.5 align-text-bottom animate-pulse" />
-                  )}
-                </p>
-              </motion.div>
-            ))
-          ) : showCursor ? (
-            <div className={`bg-surface rounded-lg px-4 py-3 ${borderClass}`}>
-              <p className="text-ivory text-sm leading-[1.75]">
-                <span className="inline-block w-[2px] h-[1em] bg-current align-text-bottom animate-pulse" />
-              </p>
-            </div>
-          ) : null}
+          {visibleParagraphs.map((paragraph, i) => (
+            <motion.div
+              key={`${agentName}-${i}`}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, ease: "easeOut" }}
+              className="bg-surface/70 rounded-md px-4 py-3"
+            >
+              <p className="text-ivory text-[15px] leading-[1.8]">{paragraph}</p>
+            </motion.div>
+          ))}
+
+          {showTypingIndicator && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+              className={`flex items-center gap-1.5 px-4 py-2 ${isSafe ? "" : "justify-end"}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isSafe ? "bg-path-safe" : "bg-path-risk"} animate-pulse`} style={{ animationDelay: "0ms" }} />
+              <span className={`w-1.5 h-1.5 rounded-full ${isSafe ? "bg-path-safe" : "bg-path-risk"} animate-pulse`} style={{ animationDelay: "200ms" }} />
+              <span className={`w-1.5 h-1.5 rounded-full ${isSafe ? "bg-path-safe" : "bg-path-risk"} animate-pulse`} style={{ animationDelay: "400ms" }} />
+            </motion.div>
+          )}
         </div>
       </div>
     </motion.div>

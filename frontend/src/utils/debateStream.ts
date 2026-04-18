@@ -19,6 +19,8 @@ export interface DebateStreamState {
   streamingAlphaText: string;
   streamingBetaText: string;
   streamingVerdictText: string;
+  streamingAlphaDone: boolean;
+  streamingBetaDone: boolean;
   // User interjections per round (keyed by round number)
   interjections: Record<number, string>;
   // Three-flag state model
@@ -39,6 +41,7 @@ function emptyState(): DebateStreamState {
     resources: [],
     streamingAgent: null, streamingRound: 0,
     streamingAlphaText: "", streamingBetaText: "", streamingVerdictText: "",
+    streamingAlphaDone: false, streamingBetaDone: false,
     interjections: {},
     usingStreamState: false, isActivelyStreaming: false, streamingContinue: false,
   };
@@ -119,6 +122,8 @@ function processSSEEvents(
               streamingRound: event.round,
               streamingAlphaText: "",
               streamingBetaText: "",
+              streamingAlphaDone: false,
+              streamingBetaDone: false,
               streamingAgent: "alpha",
             };
             notify();
@@ -138,7 +143,13 @@ function processSSEEvents(
 
           } else if (event.type === "agent_done") {
             flushBatch();
-            state = { ...state, streamingAgent: null };
+            const agent = event.agent as "alpha" | "beta";
+            state = {
+              ...state,
+              streamingAgent: null,
+              streamingAlphaDone: agent === "alpha" ? true : state.streamingAlphaDone,
+              streamingBetaDone: agent === "beta" ? true : state.streamingBetaDone,
+            };
             notify();
 
           } else if (event.type === "verdict_start") {
@@ -157,6 +168,8 @@ function processSSEEvents(
               streamingAgent: null,
               streamingAlphaText: "",
               streamingBetaText: "",
+              streamingAlphaDone: true,
+              streamingBetaDone: true,
             };
             notify();
 
@@ -260,6 +273,54 @@ export async function startDebateStream(payload: DecisionInput, captchaToken?: s
   }
 }
 
+export async function startCheckpointedStream(payload: DecisionInput, captchaToken?: string | null): Promise<void> {
+  resetDebateStream();
+  state = { ...state, input: payload, usingStreamState: true, isActivelyStreaming: true, streamingContinue: false };
+  abortCtrl = new AbortController();
+
+  try {
+    const res = await fetch(`${DEBATE_BASE}/api/debate/session/start-stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(captchaToken ? { "X-Captcha-Token": captchaToken } : {}),
+      },
+      body: JSON.stringify(payload),
+      signal: abortCtrl.signal,
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ detail: `Error ${res.status}` }));
+      throw new Error(typeof errData.detail === "string" ? errData.detail : `Server error ${res.status}`);
+    }
+
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const jsonBody = await res.json();
+      if (jsonBody.type === "crisis") {
+        state = { ...state, error: "__crisis__", done: true, isActivelyStreaming: false };
+        notify();
+        return;
+      }
+    }
+
+    if (!res.body) throw new Error("No response stream");
+
+    await processSSEEvents(res.body.getReader(), () => {
+      // Round 1 ends with session_update (paused); do NOT set done:true here.
+      if (state.isActivelyStreaming) {
+        state = { ...state, isActivelyStreaming: false, streamingContinue: false };
+        notify();
+      }
+    });
+  } catch (err) {
+    if ((err as Error).name !== "AbortError") {
+      state = { ...state, error: (err as Error).message, isActivelyStreaming: false, streamingContinue: false };
+      notify();
+    }
+  }
+}
+
 export async function continueDebateStream(
   debateId: string,
   existingRounds: RoundResult[],
@@ -285,6 +346,8 @@ export async function continueDebateStream(
     streamingAlphaText: "",
     streamingBetaText: "",
     streamingVerdictText: "",
+    streamingAlphaDone: false,
+    streamingBetaDone: false,
     streamingAgent: null,
     usingStreamState: true,
     isActivelyStreaming: true,

@@ -6,29 +6,20 @@ import StatusUpdater from "../components/StatusUpdater";
 import RoundCounter from "../components/RoundCounter";
 import FactRotator from "../components/FactRotator";
 import CancelButton from "../components/CancelButton";
-import { startDebateStream, subscribeDebate, getDebateStream, resetDebateStream } from "../utils/debateStream";
-import { startCheckpointedDebate } from "../utils/api";
-import { storeDebateState } from "../utils/debateStorage";
+import {
+  startDebateStream,
+  startCheckpointedStream,
+  subscribeDebate,
+  getDebateStream,
+  resetDebateStream,
+} from "../utils/debateStream";
 import { calculateProgress } from "../utils/loadingHelpers";
 import { CHECKPOINTED_DEBATE_ENABLED } from "../utils/constants";
-import type { CheckpointedDebateResponse, DecisionInput, DebateResponse } from "../types";
+import type { DecisionInput } from "../types";
 
 interface LoadingRouteState {
   input: DecisionInput;
   captchaToken?: string | null;
-}
-
-function toDebateResponse(result: CheckpointedDebateResponse): DebateResponse {
-  return {
-    debate_id: result.debate_id,
-    transcript: result.transcript,
-    verdict: result.verdict || "",
-    timeline: result.timeline || null,
-    metrics: result.metrics,
-    completed_rounds: result.completed_rounds,
-    total_rounds: result.total_rounds,
-    resources: result.resources || [],
-  };
 }
 
 export default function Loading() {
@@ -43,11 +34,10 @@ export default function Loading() {
   const [error, setError] = useState<string | null>(null);
   const hasFired = useRef(false);
   const hasNavigated = useRef(false);
-  const checkpointedAbort = useRef<AbortController | null>(null);
+  const startedAtRef = useRef<number>(Date.now());
+  const MIN_LOADING_MS = 3500;
 
   const handleCancel = () => {
-    checkpointedAbort.current?.abort();
-    checkpointedAbort.current = null;
     resetDebateStream();
     navigate("/decide", { replace: true });
   };
@@ -57,58 +47,20 @@ export default function Loading() {
 
     if (!hasFired.current) {
       hasFired.current = true;
+      startedAtRef.current = Date.now();
       resetDebateStream();
       if (CHECKPOINTED_DEBATE_ENABLED) {
-        checkpointedAbort.current = new AbortController();
-        void startCheckpointedDebate(payload, checkpointedAbort.current.signal, captchaToken)
-          .then((result) => {
-            const maybeCrisis = result as unknown as { type?: string };
-            if (maybeCrisis.type === "crisis" && !hasNavigated.current) {
-              hasNavigated.current = true;
-              navigate("/crisis", { replace: true });
-              return;
-            }
-
-            const debate = toDebateResponse(result);
-            storeDebateState(debate, payload);
-            setRoundCount(debate.transcript.length);
-
-            if (!hasNavigated.current) {
-              hasNavigated.current = true;
-              navigate("/debate", {
-                replace: true,
-                state: { debate, input: payload },
-              });
-            }
-          })
-          .catch((err) => {
-            if (
-              err instanceof Error &&
-              (err.name === "AbortError" || err.message === "Request was cancelled.")
-            ) {
-              return;
-            }
-            setError(err instanceof Error ? err.message : "Something went wrong.");
-          })
-          .finally(() => {
-            checkpointedAbort.current = null;
-          });
+        void startCheckpointedStream(payload, captchaToken);
       } else {
         void startDebateStream(payload, captchaToken);
       }
     }
 
-    if (CHECKPOINTED_DEBATE_ENABLED) {
-      return () => {};
-    }
-
-    const unsub = subscribeDebate(() => {
+    const tryNavigate = () => {
+      if (hasNavigated.current) return;
       const s = getDebateStream();
-      setRoundCount(s.rounds.length);
-      setStreamingRound(s.streamingRound || 0);
-      setDone(s.done || false);
 
-      if (s.error && !hasNavigated.current) {
+      if (s.error) {
         if (s.error === "__crisis__") {
           hasNavigated.current = true;
           navigate("/crisis", { replace: true });
@@ -118,13 +70,30 @@ export default function Loading() {
         return;
       }
 
-      if (s.rounds.length >= 1 && !hasNavigated.current) {
+      const elapsed = Date.now() - startedAtRef.current;
+      const streamStarted = s.streamingRound >= 1 || s.streamingAlphaText.length > 0 || s.rounds.length >= 1;
+      // Hold Loading for a minimum display window so the transition doesn't feel abrupt.
+      if (elapsed >= MIN_LOADING_MS && streamStarted) {
         hasNavigated.current = true;
         navigate("/debate", { replace: true });
       }
+    };
+
+    const unsub = subscribeDebate(() => {
+      const s = getDebateStream();
+      setRoundCount(s.rounds.length);
+      setStreamingRound(s.streamingRound || 0);
+      setDone(s.done || false);
+      tryNavigate();
     });
 
-    return unsub;
+    // Also tick in case the stream is already ahead when the min-hold elapses.
+    const interval = setInterval(tryNavigate, 250);
+
+    return () => {
+      unsub();
+      clearInterval(interval);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -147,7 +116,7 @@ export default function Loading() {
   const progress = calculateProgress(roundCount, 5);
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-6 relative overflow-hidden" style={{ backgroundColor: "#0a0a0a" }}>
+    <div className="min-h-screen flex flex-col items-center justify-center px-6 py-12 relative overflow-hidden" style={{ backgroundColor: "#0a0a0a" }}>
       {/* Ambient Background Effects */}
       <div className="fixed inset-0 z-0">
         {/* Film grain overlay */}

@@ -7,6 +7,7 @@ import { useDivergeAuth } from "../hooks/useAuth";
 import { useToast } from "../components/Toast";
 import {
   emailResults,
+  getCheckpointedDebateSession,
   getCapabilities,
   saveDebate,
   scheduleCheckin,
@@ -23,8 +24,16 @@ import {
   removeLocalJournalEntry,
   saveGutCheckState,
   saveLocalJournalEntry,
+  storeDebateState,
 } from "../utils/debateStorage";
-import type { Capabilities, ChronologicalTimeline, DebateResponse, DecisionInput, Resource } from "../types";
+import type {
+  Capabilities,
+  CheckpointedDebateResponse,
+  ChronologicalTimeline,
+  DebateResponse,
+  DecisionInput,
+  Resource,
+} from "../types";
 
 const RE_BOLD = /\*\*/g;
 const RE_HEADINGS = /^#{1,6}\s+/gm;
@@ -178,6 +187,19 @@ function extractNamedSections(verdictText: string, headerRegex: RegExp): { headi
   });
 }
 
+function checkpointedToDebateResponse(result: CheckpointedDebateResponse): DebateResponse {
+  return {
+    debate_id: result.debate_id,
+    transcript: result.transcript,
+    verdict: result.verdict || "",
+    timeline: result.timeline || null,
+    metrics: result.metrics,
+    completed_rounds: result.completed_rounds,
+    total_rounds: result.total_rounds,
+    resources: result.resources || [],
+  };
+}
+
 export default function Verdict() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -187,7 +209,7 @@ export default function Verdict() {
     fromJournal?: boolean;
   };
   const stored = !locationState.debate ? loadDebateState() : null;
-  const debate = locationState.debate || stored?.debate;
+  const [debate, setDebate] = useState<DebateResponse | undefined>(locationState.debate || stored?.debate);
   const input = locationState.input || stored?.input;
   const initialGutCheck = debate?.debate_id ? loadGutCheckState(debate.debate_id) : null;
   const shouldSkipGutCheck = Boolean(locationState.fromJournal && debate?.verdict);
@@ -216,7 +238,7 @@ export default function Verdict() {
   const [gutSubmitted, setGutSubmitted] = useState(initialGutCheck?.submitted ?? shouldSkipGutCheck);
 
   useEffect(() => {
-    if (!debate || !input || authLoading) return;
+    if (!debate || !input || authLoading || !debate.verdict) return;
     const debateId = debate.debate_id;
     if (!debateId) return;
 
@@ -285,6 +307,44 @@ export default function Verdict() {
   }, []);
 
   useEffect(() => {
+    if (!debate?.debate_id || debate.verdict) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const pollSession = async () => {
+      try {
+        const session = await getCheckpointedDebateSession(debate.debate_id);
+        if (cancelled) return;
+
+        if (session.verdict) {
+          const updatedDebate = checkpointedToDebateResponse(session);
+          setDebate(updatedDebate);
+          if (input) {
+            storeDebateState(updatedDebate, input);
+          }
+          return;
+        }
+      } catch {
+        // Keep polling quietly while the verdict bundle finishes in the background.
+      }
+
+      if (!cancelled) {
+        timer = setTimeout(() => {
+          void pollSession();
+        }, 1500);
+      }
+    };
+
+    void pollSession();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [debate?.debate_id, debate?.verdict, input]);
+
+  useEffect(() => {
     if (!debate?.debate_id) return;
 
     const saved = loadGutCheckState(debate.debate_id);
@@ -318,6 +378,7 @@ export default function Verdict() {
   );
   const pathAName = input?.path_a || "Option A";
   const pathBName = input?.path_b || "Option B";
+  const verdictPending = debate.completed_rounds >= debate.total_rounds && verdictText.length === 0;
 
   const RE_HEADING_BOUNDARY = /\n\s*(?:\*\*[A-Z]|#{1,6}\s+[A-Z])/;
 
@@ -572,6 +633,27 @@ export default function Verdict() {
             This helps you notice if the AI confirmed what you already believed<br />
             vs. genuinely shifted your thinking.
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (verdictPending) {
+    return (
+      <div className="min-h-screen bg-void px-6 py-16 flex items-center justify-center">
+        <div className="max-w-lg w-full border border-white/10 bg-surface/30 rounded-xl p-8 text-center">
+          <p className="text-path-risk text-[10px] font-mono uppercase tracking-[0.3em] mb-4">
+            Final synthesis
+          </p>
+          <h2 className="font-display text-lg text-ivory mb-3">The verdict is still being written.</h2>
+          <p className="text-ivory-dim text-sm leading-relaxed">
+            The Knot is finished. We&apos;re turning the full debate into your final readout now.
+          </p>
+          <div className="mt-6 flex justify-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-path-risk animate-pulse" style={{ animationDelay: "0ms" }} />
+            <span className="w-2 h-2 rounded-full bg-path-risk animate-pulse" style={{ animationDelay: "180ms" }} />
+            <span className="w-2 h-2 rounded-full bg-path-risk animate-pulse" style={{ animationDelay: "360ms" }} />
+          </div>
         </div>
       </div>
     );
