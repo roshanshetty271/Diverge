@@ -22,6 +22,9 @@ export default function Templates() {
       case "education": return "https://lh3.googleusercontent.com/aida-public/AB6AXuBDMLRfL6K23YGHPKOUw5erX3KokcS4TjAcVLIrfMXuebVRhKf6lnMdEV8q3pn1IN7JMjSzMM6qNOW4sramwQ0YAjdRb31Em0-wF5Q4LdlhXJaMwuzM1dSKLRCK39ZtylaD5H2VwdSHCa6DC45giOmdQlUfwaPd2V-4EaebPUp8DshkQQvUCALwfkQjwoX6Lm4MmmWqfIexvB7BBIt98WSD9FabcdBSZUYujffpzOd8JbKolr6cq9cnNYilCpLz5yrNDWXuuSM6AUs";
       case "relationship": return "https://lh3.googleusercontent.com/aida-public/AB6AXuAtfRS5sEtFINan4jJjzV-uStnOqWkeGtAwaJD7XmZKcXIQHUldIzcyd50m0tvLDv5a9TTopJknCNAD3JkPa94lLaMnzDwYigRg8NnOUyGVIc01NAnKTFTpKrHc5a1DsD1MocC1yyIF_8c1up_RKuSTuqhM4hb3UAFTs4KcJc03B77jS97JvW9-Js3_5yKDRMuyOyaRHJGN4tsWoK146bPclobVzivltMDuO0a8jwONRdQLnb1PTFGLSM77zEUbyXNBLBGQd-ahF9Q";
       case "lifestyle": return "https://lh3.googleusercontent.com/aida-public/AB6AXuAA7zqCAJ-ojzYEqmoPjakATVxc5M68VGITKq_iNij8aDmTH5rvYQFZSBYxHJu6iJJJnRFcPcYT0G-8p6Tga_AiPfanxj_MeLsX8RNGS_2kFm1GYZENjpyKCDK0IP-KDNwP9UxApU6r4gYsVIBs0-TeiJG5Lt6AbngiXd-IKbVTGZQ9czExXU7psLcoS5se9xCv_QcLein_hhXiUxZG2O9pxJQZIMjsJmGuzLE2ubWMCqCqksCzwRYXiQ1ge9Q0b2icHN6alF2szTM";
+      case "volunteer": return "https://images.unsplash.com/photo-1593113598332-cd288d649433?w=800&q=80&auto=format&fit=crop";
+      case "trade": return "https://images.unsplash.com/photo-1504307651254-35680f356dfd?w=800&q=80&auto=format&fit=crop";
+      case "family": return "https://images.unsplash.com/photo-1609220136736-443140cffec6?w=800&q=80&auto=format&fit=crop";
       default: return "";
     }
   };

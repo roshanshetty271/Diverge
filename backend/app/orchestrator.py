@@ -211,8 +211,11 @@ def _generate_with_guardrails(
 
         log_validation_failure(debate_id, stage_label, result)
         _record_guardrail_failures(user_ctx, result)
-        motif_only_failure = result.violations and all(violation.code == "repeated_motif" for violation in result.violations)
-        if motif_only_failure:
+        # Run the motif scrub whenever we have motif violations — even if other
+        # violations coexist. If the scrub clears every outstanding violation, use it;
+        # otherwise continue into the rewrite loop with the remaining issues only.
+        has_motif_violation = any(v.code == "repeated_motif" for v in result.violations)
+        if has_motif_violation:
             scrubbed_text = scrub_repeated_motifs(text, result)
             if scrubbed_text and scrubbed_text != text:
                 scrubbed_result = validate_generated_text(
@@ -225,6 +228,10 @@ def _generate_with_guardrails(
                 if scrubbed_result.is_valid:
                     logger.info("Motif scrub rescued stage=%s debate_id=%s", stage_label, debate_id)
                     return scrubbed_text
+                # Scrub didn't fully rescue; keep going with the remaining violations
+                # so the rewrite brief isn't dominated by motif noise that's already fixed.
+                text = scrubbed_text
+                result = scrubbed_result
         rewrite_instruction = format_violation_report(result) if attempt == 0 else strict_grounding_rewrite_brief()
 
     logger.warning("Guardrail exhaustion: returning fallback for stage=%s debate_id=%s", stage_label, debate_id)
