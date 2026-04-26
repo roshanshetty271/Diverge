@@ -191,17 +191,11 @@ def detect_decision_category(
     'relationship', 'health', or 'general'.
     Order matters: startup before career (subset), education before financial (overlap).
     """
-    def _normalize_template_text(value: str) -> str:
-        return " ".join(re.findall(r"[a-z0-9']+", value.lower()))
-
     if template_id:
         from app.data.template_catalog import get_template_by_id
 
         template = get_template_by_id(template_id)
-        if template and (
-            _normalize_template_text(path_a) == _normalize_template_text(template.path_a)
-            and _normalize_template_text(path_b) == _normalize_template_text(template.path_b)
-        ):
+        if template:
             return template.category
 
     combined = " ".join(
@@ -275,18 +269,20 @@ ROUNDS = get_rounds("financial")
 PERSONA_CHALLENGER = {
     "label": "challenger",
     "tone": (
-        "Your tone is clear-eyed, steady, and grounded. You took the riskier path, and you understand both the upside and the cost. "
-        "Name the fear honestly, then explain what the risk actually bought you - or failed to buy you - without swagger, contempt, or salesmanship. "
-        "You speak like someone who lived through uncertainty and learned what was worth it."
+        "Voice: short declarative sentences. Fragments are allowed. "
+        "You stake a claim, then qualify one beat later. "
+        "You sound like someone who has already paid the cost and is not "
+        "interested in impressing anyone. Avoid compound sentences with 'but' in the middle."
     ),
 }
 
 PERSONA_DEFENDER = {
     "label": "defender",
     "tone": (
-        "Your tone is grounded, calm, and unflinching. You chose what others call safe, and you own the reasons without apology. "
-        "Name the exhaustion, pressure, or duty that made stability matter, then explain what this path actually preserved. "
-        "You do not romanticize comfort, and you do not sneer at risk. You simply defend what steadiness made possible."
+        "Voice: longer, patient sentences. You take your time. "
+        "You concede the other path's appeal before you defend your own, always in that order. "
+        "You sound like someone explaining a tradeoff to a younger sibling, not winning an argument. "
+        "Avoid punchy fragments."
     ),
 }
 
@@ -383,6 +379,9 @@ CATEGORY_LAWS: dict[str, str] = {
 }
 
 
+_ANCHOR_PATTERN = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?\s?[kKmM]?(?:/[a-zA-Z]+)?")
+
+
 def _build_prompt(user_context: dict, round_info: dict, path_key: str, persona: dict) -> str:
     """Build system prompt for an agent with the given persona."""
     samples = user_context.get("writing_samples") or "No samples provided."
@@ -391,6 +390,42 @@ def _build_prompt(user_context: dict, round_info: dict, path_key: str, persona: 
     other_key = "path_b" if path_key == "path_a" else "path_a"
     other_path = user_context[other_key]
     timeline = round_info.get("timeline", "")
+
+    financial_context = user_context.get("financial_context") or ""
+    anchors = _ANCHOR_PATTERN.findall(financial_context)
+    anchor_rule = ""
+    if anchors:
+        anchor_rule = (
+            f"\nNUMERIC ANCHORS YOU MUST REFERENCE AT LEAST ONE OF: "
+            f"{', '.join(anchors[:4])}\n"
+            f"Weave one exact figure in so the tradeoff stops being abstract.\n"
+        )
+
+    research_blurb = user_context.get("_research_blurb") or ""
+    research_rule = ""
+    if research_blurb:
+        truncated = research_blurb[:1200].rstrip()
+        research_rule = (
+            "\nBACKGROUND RESEARCH (paraphrase, do NOT name the source):\n"
+            f"{truncated}\n"
+            "You MUST weave EXACTLY ONE specific statistic or factual finding from this into your response. "
+            "Paraphrase it. Do NOT list multiple stats. Do NOT name the source.\n"
+        )
+
+    runway_blurb = user_context.get("_runway_blurb") or ""
+    monte_carlo_blurb = user_context.get("_monte_carlo_blurb") or ""
+    financial_lines = []
+    if runway_blurb:
+        financial_lines.append(f"Runway model: {runway_blurb}")
+    if monte_carlo_blurb:
+        financial_lines.append(f"Monte Carlo (60-month outlook):\n{monte_carlo_blurb}")
+    financial_rule = ""
+    if financial_lines:
+        financial_rule = (
+            "\nFINANCIAL MODEL (computed from the user's actual figures):\n"
+            + "\n".join(financial_lines)
+            + "\nReference at most ONE of these numbers if it makes your argument concrete.\n"
+        )
 
     category = user_context.get("_category", "general")
     domain_context = DOMAIN_EXPERTISE.get(category, DOMAIN_EXPERTISE["general"])
@@ -432,6 +467,7 @@ HOW TO RESPOND - this is a grounded reckoning, not a performance:
 
 RULES:
 - NEVER open with "I respect that", "I hear you", or "I get it." Start inside the moment.
+- NEVER open with "Right now,", "Sitting in", "Standing at", or "I'm in a [place]". Start inside a thought or an action, not inside a setting.
 - NEVER describe routines ("every morning I...", "a typical day..."). Describe ONE specific moment, scene, or turning point.
 - Never repeat a point from a previous round.
 - Never invent personal facts that were not provided. Do not make up children, partners, family members, identities, debts, diagnoses, or backstory unless they appear in the user context, writing samples, or earlier debate text.
@@ -479,7 +515,7 @@ BEFORE WRITING (think silently, never output this):
 2. What quiet cost of "{other_path}" is being minimized or denied?
 3. What truth would hit hardest if I said it plainly, without performance?
 4. Write: open in the moment, make the body feel it, then name the cost.
-
+{anchor_rule}{research_rule}{financial_rule}
 USER CONTEXT:
 - Decision: "{path}" vs "{other_path}"
 - Their situation: {user_context.get('constraints') or 'Not provided'}
@@ -498,18 +534,70 @@ def build_beta_prompt(user_context: dict, round_info: dict, persona: dict | None
     return _build_prompt(user_context, round_info, "path_b", persona or PERSONA_CHALLENGER)
 
 
+_VERDICT_FALLBACK_RESEARCH = (
+    "- When relevant, weave in these research findings naturally (don't force them if they don't fit):\n"
+    "  * People regret inaction far more than action over time, especially at 10+ years (Gilovich & Medvec, replicated 2022, n=988).\n"
+    "  * Decision paralysis is driven by intolerance of uncertainty, not lack of information (2025 research). More thinking rarely helps.\n"
+    "  * Habit formation takes 66 days on average (range 18-254), not 21 days (Lally/UCL, confirmed 2026). Change is slower than people expect.\n"
+    "  * 67% of career changers report better satisfaction, but only 13% who want to switch actually do (2025).\n"
+    "  * 90% of startups fail, but 42% fail from lack of product-market fit, not money (Digital Silk 2026).\n"
+    "  Use these ONLY when they directly apply to this specific decision."
+)
+
+
 def build_verdict_prompt(user_context: dict, transcript_text: str) -> str:
     """Build the verdict prompt with growth bias and optional user name."""
     path_a = user_context["path_a"]
     path_b = user_context["path_b"]
     values = user_context.get("values") or "not specified"
 
+    interjections = user_context.get("_interjections") or []
+    interjection_block = ""
+    if interjections:
+        bullets = "\n".join(f'- "{item}"' for item in interjections)
+        interjection_block = (
+            "\n\nContext the user added mid-debate (treat as current fact):\n"
+            f"{bullets}\n"
+            "Your 'Your next move' MUST be consistent with this. If the user already said "
+            "a meeting is scheduled or an interview happened, do not tell them to 'reach out' or 'ask'."
+        )
+
+    # Replace the generic hardcoded research list with the category-specific
+    # chunk content when grounding pre-retrieved one. Otherwise fall back to
+    # the curated generic list so the verdict still has reference material.
+    research_blurb = user_context.get("_research_blurb") or ""
+    if research_blurb:
+        truncated = research_blurb[:1200].rstrip()
+        research_block = (
+            "BACKGROUND RESEARCH (paraphrase, do NOT name the source):\n"
+            f"{truncated}\n"
+            "In 'What this decision is really about' OR 'The bottleneck', you MUST cite EXACTLY ONE "
+            "concrete fact from the research above. Paraphrase it. No source name. No multi-stat lists."
+        )
+    else:
+        research_block = _VERDICT_FALLBACK_RESEARCH
+
+    runway_blurb = user_context.get("_runway_blurb") or ""
+    monte_carlo_blurb = user_context.get("_monte_carlo_blurb") or ""
+    financial_block = ""
+    if runway_blurb or monte_carlo_blurb:
+        lines = ["FINANCIAL MODEL (computed from the user's actual figures):"]
+        if runway_blurb:
+            lines.append(f"Runway model: {runway_blurb}")
+        if monte_carlo_blurb:
+            lines.append(f"Monte Carlo (60-month outlook):\n{monte_carlo_blurb}")
+        lines.append(
+            "Reference at most ONE of these numbers in the verdict if it sharpens "
+            "the tradeoff. Do not list all of them."
+        )
+        financial_block = "\n".join(lines)
+
     return f"""You just watched two versions of the same person live out their futures across 5 rounds. Here is what they described:
 
 {transcript_text}
 
 The decision: "{path_a}" vs "{path_b}"
-What matters to them: {values}
+What matters to them: {values}{interjection_block}
 
 Give your honest verdict. Write like a clear-eyed friend leaving a late-night voice memo. Not an essay. Not a therapist. Not a judge keeping score.
 
@@ -533,13 +621,8 @@ CRITICAL RULES:
 - Do not use deathbed imagery, motivational slogans, or generic self-help framing.
 - Do not use attack-dog phrases like "You think...", "It's an illusion", or "Let's be real".
 - Keep the tone forensic, not theatrical.
-- When relevant, weave in these research findings naturally (don't force them if they don't fit):
-  * People regret inaction far more than action over time, especially at 10+ years (Gilovich & Medvec, replicated 2022, n=988).
-  * Decision paralysis is driven by intolerance of uncertainty, not lack of information (2025 research). More thinking rarely helps.
-  * Habit formation takes 66 days on average (range 18-254), not 21 days (Lally/UCL, confirmed 2026). Change is slower than people expect.
-  * 67% of career changers report better satisfaction, but only 13% who want to switch actually do (2025).
-  * 90% of startups fail, but 42% fail from lack of product-market fit, not money (Digital Silk 2026).
-  Use these ONLY when they directly apply to this specific decision.
+{research_block}
+{financial_block}
 
 Format your response with these exact section headers:
 
@@ -558,13 +641,12 @@ Format your response with these exact section headers:
 [One short paragraph naming the primary friction in the way: fear of failure, fear of rejection, sunk-cost thinking, loss aversion, scarcity panic, identity foreclosure, perfectionism, burnout/avoidance, or family-duty pressure. Explain it using the debate evidence, not generic advice.]
 
 **Your next move:**
-[ONE specific, tiny action they can take in the next 24 hours. Not a life plan. Not "think about it more." A concrete micro-step so small it feels almost silly NOT to do it.
-CRITICAL CONSTRAINT: Do not hallucinate access. If they state they have never spoken to someone, do NOT tell them to text or call that person. The action must be physically possible right now based ONLY on the context provided.
-- For social/relationship decisions: a specific conversation starter or micro-action they can do based ONLY on their current access level.
-- For career/startup decisions: one 30-minute task (update a profile, write down 3 problems, email one person)
-- For lifestyle changes: one physical action (put running shoes by the door, throw out one thing, sign up for one class)
-The action must break inertia. Make inaction harder tomorrow than movement today.
-Frame it as: "Right now, do this: ___"]"""
+ONE action that is specific to THIS person's constraints above (including any mid-debate context). It must:
+- take under 10 minutes
+- be physically possible right now with only the access level the debate established
+- remove one piece of uncertainty that THIS specific debate surfaced
+
+Do not use generic phrasing ("Spend 30 minutes", "Put X by the door", "Email one person"). Name the exact action for this person. Frame it as: "Right now, do this: ___\""""
 
 
 def build_timeline_simulator_prompt(

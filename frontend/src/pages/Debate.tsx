@@ -20,7 +20,7 @@ const CHART_TABS = [
   { key: "Radar", label: "Radar", description: "How each path scores across five dimensions right now." },
   { key: "Timeline", label: "Timeline", description: "How happiness evolves across rounds." },
   { key: "Regret", label: "Regret", description: "Probability of regret for each path over time." },
-  { key: "Sentiment", label: "Sentiment", description: "Emotional tone of each path's arguments (via Amazon Comprehend)." },
+  { key: "Sentiment", label: "Sentiment", description: "Emotional tone of each path's arguments." },
 ] as const;
 type ChartTab = (typeof CHART_TABS)[number]["key"];
 

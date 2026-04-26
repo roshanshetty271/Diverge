@@ -228,6 +228,20 @@ class CapabilitiesResponse(BaseModel):
     agentcore_memory: bool = False
 
 
+FinalizationStepStatus = Literal["running", "done", "skipped"]
+
+
+class FinalizationProgress(BaseModel):
+    """Sub-step progress for the final-round finalization bundle.
+
+    Each field reflects real backend state written by `_finalize_checkpointed_session_bundle`
+    as verdict/timeline/resources futures resolve via `as_completed`.
+    """
+    verdict: Optional[FinalizationStepStatus] = None
+    timeline: Optional[FinalizationStepStatus] = None
+    resources: Optional[FinalizationStepStatus] = None
+
+
 class CheckpointedDebateResponse(BaseModel):
     """Checkpointed debate state returned after each round."""
     status: str
@@ -240,3 +254,4 @@ class CheckpointedDebateResponse(BaseModel):
     total_rounds: int
     resources: list[Resource] = []
     next_round_number: Optional[int] = None
+    finalization_progress: Optional[FinalizationProgress] = None

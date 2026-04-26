@@ -82,8 +82,16 @@ export interface DebateResponse {
   resources?: Resource[];
 }
 
+export type FinalizationStepStatus = "running" | "done" | "skipped";
+
+export interface FinalizationProgress {
+  verdict?: FinalizationStepStatus | null;
+  timeline?: FinalizationStepStatus | null;
+  resources?: FinalizationStepStatus | null;
+}
+
 export interface CheckpointedDebateResponse {
-  status: "paused" | "complete";
+  status: "paused" | "complete" | "finalizing";
   debate_id: string;
   transcript: RoundResult[];
   verdict: string;
@@ -93,6 +101,7 @@ export interface CheckpointedDebateResponse {
   total_rounds: number;
   resources?: Resource[];
   next_round_number?: number | null;
+  finalization_progress?: FinalizationProgress | null;
 }
 
 export interface DecisionInput {

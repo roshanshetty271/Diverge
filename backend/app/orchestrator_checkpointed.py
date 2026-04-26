@@ -11,6 +11,7 @@ from app.db.dynamodb import (
     get_debate_session,
     update_debate_session,
 )
+from app.grounding import build_grounding_context
 from app.orchestrator import (
     TOOL_MAP,
     _assign_personas,
@@ -21,7 +22,12 @@ from app.orchestrator import (
     _run_round,
     _stream_single_round,
 )
-from app.schemas import CheckpointedDebateResponse, RoundMetrics, RoundResult
+from app.schemas import (
+    CheckpointedDebateResponse,
+    FinalizationProgress,
+    RoundMetrics,
+    RoundResult,
+)
 from app.tools.knowledge import research_insight
 
 logger = logging.getLogger(__name__)
@@ -76,6 +82,14 @@ def _session_to_response(debate_id: str, session: dict) -> CheckpointedDebateRes
     if status == "paused" and current_round_index < total_rounds:
         next_round_number = current_round_index + 1
 
+    finalization_progress_raw = session.get("finalization_progress")
+    finalization_progress: FinalizationProgress | None = None
+    if isinstance(finalization_progress_raw, dict):
+        try:
+            finalization_progress = FinalizationProgress(**finalization_progress_raw)
+        except Exception:
+            finalization_progress = None
+
     return CheckpointedDebateResponse(
         status=status,
         debate_id=debate_id,
@@ -87,6 +101,7 @@ def _session_to_response(debate_id: str, session: dict) -> CheckpointedDebateRes
         total_rounds=total_rounds,
         resources=session.get("resources", []),
         next_round_number=next_round_number,
+        finalization_progress=finalization_progress,
     )
 
 
@@ -111,20 +126,45 @@ def _finalize_checkpointed_session_bundle(
     prev_beta: str | None,
     user_context: dict,
     total_rounds: int,
+    interjections_history: list[str] | None = None,
 ) -> None:
     """Finish verdict/timeline/resource generation after the final round without blocking SSE."""
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    interjections_history = list(interjections_history or [])
+    user_context = dict(user_context)
+    user_context["_interjections"] = list(interjections_history)
 
     completed_rounds = len([r for r in transcript if r.status == "completed"])
+    timeline_active = completed_rounds >= 3
 
+    progress: dict[str, str] = {
+        "verdict": "running",
+        "timeline": "running" if timeline_active else "skipped",
+        "resources": "running",
+    }
+    update_debate_session(debate_id, {"finalization_progress": dict(progress)})
+
+    results: dict[str, object] = {}
     try:
         with ThreadPoolExecutor(max_workers=3) as pool:
             verdict_future = pool.submit(_build_partial_verdict, transcript, user_context, total_rounds)
-            timeline_future = pool.submit(_generate_structured_timeline, transcript, user_context) if completed_rounds >= 3 else None
             resources_future = pool.submit(lambda: _serialize_models(_get_resources(user_context)))
-            verdict = verdict_future.result()
-            timeline = timeline_future.result() if timeline_future else None
-            resources = resources_future.result()
+            future_to_name = {verdict_future: "verdict", resources_future: "resources"}
+            if timeline_active:
+                timeline_future = pool.submit(_generate_structured_timeline, transcript, user_context)
+                future_to_name[timeline_future] = "timeline"
+
+            for fut in as_completed(future_to_name):
+                name = future_to_name[fut]
+                results[name] = fut.result()
+                progress[name] = "done"
+                if len(results) < len(future_to_name):
+                    update_debate_session(debate_id, {"finalization_progress": dict(progress)})
+
+        verdict = results.get("verdict", "")
+        timeline = results.get("timeline") if timeline_active else None
+        resources = results.get("resources", [])
     except Exception:
         logger.exception("Async checkpointed finalization failed for debate_id=%s", debate_id)
         try:
@@ -133,6 +173,11 @@ def _finalize_checkpointed_session_bundle(
             verdict = "The verdict could not be fully generated. Please try opening this debate again in a moment."
         timeline = None
         resources = []
+        progress = {
+            "verdict": "done" if verdict else "running",
+            "timeline": "skipped",
+            "resources": "done" if resources else "skipped",
+        }
 
     complete_debate_session(
         debate_id,
@@ -146,6 +191,8 @@ def _finalize_checkpointed_session_bundle(
             "timeline": timeline.model_dump() if timeline else None,
             "resources": resources,
             "total_rounds": total_rounds,
+            "interjections": list(interjections_history),
+            "finalization_progress": dict(progress),
         },
     )
     _persist_to_agentcore_memory(debate_id, user_context, transcript, verdict)
@@ -171,6 +218,7 @@ def start_checkpointed_debate(user_context: dict, user_id: str = "anonymous") ->
         "debate_id": debate_id,
         "user_id": user_id,
     }
+    build_grounding_context(enriched_context, category)
 
     result = _run_round(
         rounds[0],
@@ -243,8 +291,13 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
     prev_beta = session.get("prev_beta")
     current_round_index = int(session.get("current_round_index", len(transcript)))
 
+    interjections_history: list[str] = list(session.get("interjections", []) or [])
+    user_context["_interjections"] = list(interjections_history)
+
     if interjection:
         debate_summary += f"\n[User interjects]: {interjection}\n"
+        interjections_history.append(interjection)
+        user_context["_interjections"] = list(interjections_history)
 
     if current_round_index >= len(rounds):
         raise ValueError("Debate session is already at the final round.")
@@ -277,15 +330,35 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
     completed_rounds = len([r for r in transcript if r.status == "completed"])
 
     if next_round_index >= len(rounds):
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        timeline_active = completed_rounds >= 3
+        progress: dict[str, str] = {
+            "verdict": "running",
+            "timeline": "running" if timeline_active else "skipped",
+            "resources": "running",
+        }
+        update_debate_session(debate_id, {"finalization_progress": dict(progress)})
+
+        results: dict[str, object] = {}
         with ThreadPoolExecutor(max_workers=3) as pool:
             verdict_future = pool.submit(_build_partial_verdict, transcript, user_context, len(rounds))
-            timeline_future = pool.submit(_generate_structured_timeline, transcript, user_context) if completed_rounds >= 3 else None
             resources_future = pool.submit(lambda: _serialize_models(_get_resources(user_context)))
-            verdict = verdict_future.result()
-            timeline = timeline_future.result() if timeline_future else None
-            resources = resources_future.result()
+            future_to_name = {verdict_future: "verdict", resources_future: "resources"}
+            if timeline_active:
+                timeline_future = pool.submit(_generate_structured_timeline, transcript, user_context)
+                future_to_name[timeline_future] = "timeline"
+
+            for fut in as_completed(future_to_name):
+                name = future_to_name[fut]
+                results[name] = fut.result()
+                progress[name] = "done"
+                if len(results) < len(future_to_name):
+                    update_debate_session(debate_id, {"finalization_progress": dict(progress)})
+
+        verdict = results.get("verdict", "")
+        timeline = results.get("timeline") if timeline_active else None
+        resources = results.get("resources", [])
 
         complete_debate_session(
             debate_id,
@@ -299,6 +372,8 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
                 "timeline": timeline.model_dump() if timeline else None,
                 "resources": resources,
                 "total_rounds": len(rounds),
+                "interjections": list(interjections_history),
+                "finalization_progress": dict(progress),
             },
         )
         _persist_to_agentcore_memory(debate_id, user_context, transcript, verdict)
@@ -314,6 +389,7 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
             total_rounds=len(rounds),
             resources=resources,
             next_round_number=None,
+            finalization_progress=FinalizationProgress(**progress),
         )
 
     update_debate_session(
@@ -326,6 +402,7 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
             "debate_summary": debate_summary,
             "prev_beta": prev_beta,
             "total_rounds": len(rounds),
+            "interjections": list(interjections_history),
         },
     )
 
@@ -369,6 +446,7 @@ def start_checkpointed_streaming(user_context: dict, user_id: str = "anonymous")
         "debate_id": debate_id,
         "user_id": user_id,
     }
+    build_grounding_context(enriched_context, category)
 
     yield {
         "type": "debate_start",
@@ -449,15 +527,19 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
     prev_beta = session.get("prev_beta")
     current_round_index = int(session.get("current_round_index", len(transcript)))
 
+    interjections_history: list[str] = list(session.get("interjections", []) or [])
+    user_context["_interjections"] = list(interjections_history)
+
     if interjection:
         debate_summary += f"\n[User interjects]: {interjection}\n"
+        interjections_history.append(interjection)
+        user_context["_interjections"] = list(interjections_history)
 
     if current_round_index >= len(rounds):
         raise ValueError("Debate session is already at the final round.")
 
     round_info = rounds[current_round_index]
 
-    # Stream one round — yields token events, returns (RoundResult, updated_summary)
     result, debate_summary = yield from _stream_single_round(
         round_index=current_round_index,
         round_info=round_info,
@@ -493,6 +575,7 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
                 "timeline": None,
                 "resources": [],
                 "total_rounds": len(rounds),
+                "interjections": list(interjections_history),
             },
         )
 
@@ -506,6 +589,7 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
                 prev_beta,
                 user_context,
                 len(rounds),
+                list(interjections_history),
             ),
             daemon=True,
         ).start()
@@ -520,7 +604,6 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
             "verdict_ready": False,
         }
     else:
-        # Non-final round — save and pause
         update_debate_session(
             debate_id,
             {
@@ -531,6 +614,7 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
                 "debate_summary": debate_summary,
                 "prev_beta": prev_beta,
                 "total_rounds": len(rounds),
+                "interjections": list(interjections_history),
             },
         )
 

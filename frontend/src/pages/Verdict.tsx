@@ -32,6 +32,7 @@ import type {
   ChronologicalTimeline,
   DebateResponse,
   DecisionInput,
+  FinalizationProgress,
   Resource,
 } from "../types";
 
@@ -236,6 +237,7 @@ export default function Verdict() {
   const [gutLeaning, setGutLeaning] = useState<string | null>(initialGutCheck?.leaning ?? null);
   const [gutFear, setGutFear] = useState(initialGutCheck?.fear ?? "");
   const [gutSubmitted, setGutSubmitted] = useState(initialGutCheck?.submitted ?? shouldSkipGutCheck);
+  const [finalizationProgress, setFinalizationProgress] = useState<FinalizationProgress | null>(null);
 
   useEffect(() => {
     if (!debate || !input || authLoading || !debate.verdict) return;
@@ -316,6 +318,10 @@ export default function Verdict() {
       try {
         const session = await getCheckpointedDebateSession(debate.debate_id);
         if (cancelled) return;
+
+        if (session.finalization_progress) {
+          setFinalizationProgress(session.finalization_progress);
+        }
 
         if (session.verdict) {
           const updatedDebate = checkpointedToDebateResponse(session);
@@ -639,6 +645,13 @@ export default function Verdict() {
   }
 
   if (verdictPending) {
+    const fp = finalizationProgress;
+    const steps: Array<{ key: "verdict" | "timeline" | "resources"; label: string }> = [
+      { key: "verdict", label: "Writing the verdict" },
+      { key: "timeline", label: "Mapping the timeline" },
+      { key: "resources", label: "Selecting resources" },
+    ];
+
     return (
       <div className="min-h-screen bg-void px-6 py-16 flex items-center justify-center">
         <div className="max-w-lg w-full border border-white/10 bg-surface/30 rounded-xl p-8 text-center">
@@ -649,11 +662,37 @@ export default function Verdict() {
           <p className="text-ivory-dim text-sm leading-relaxed">
             The Knot is finished. We&apos;re turning the full debate into your final readout now.
           </p>
-          <div className="mt-6 flex justify-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-path-risk animate-pulse" style={{ animationDelay: "0ms" }} />
-            <span className="w-2 h-2 rounded-full bg-path-risk animate-pulse" style={{ animationDelay: "180ms" }} />
-            <span className="w-2 h-2 rounded-full bg-path-risk animate-pulse" style={{ animationDelay: "360ms" }} />
-          </div>
+          {fp ? (
+            <ul className="mt-6 space-y-2 text-left max-w-xs mx-auto">
+              {steps.map(({ key, label }) => {
+                const status = fp[key] ?? "running";
+                if (status === "skipped") {
+                  return (
+                    <li key={key} className="flex items-center gap-3 text-sm text-ivory-faint">
+                      <MaterialIcon name="block" className="text-base" />
+                      <span className="italic">{label} skipped</span>
+                    </li>
+                  );
+                }
+                const isDone = status === "done";
+                return (
+                  <li key={key} className="flex items-center gap-3 text-sm">
+                    <MaterialIcon
+                      name={isDone ? "check_circle" : "pending"}
+                      className={`text-base ${isDone ? "text-path-safe" : "text-path-risk animate-pulse"}`}
+                    />
+                    <span className={isDone ? "text-ivory-dim line-through" : "text-ivory"}>{label}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <div className="mt-6 flex justify-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-path-risk animate-pulse" style={{ animationDelay: "0ms" }} />
+              <span className="w-2 h-2 rounded-full bg-path-risk animate-pulse" style={{ animationDelay: "180ms" }} />
+              <span className="w-2 h-2 rounded-full bg-path-risk animate-pulse" style={{ animationDelay: "360ms" }} />
+            </div>
+          )}
         </div>
       </div>
     );

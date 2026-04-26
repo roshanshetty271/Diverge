@@ -29,7 +29,7 @@ Team Sic Mundus | AWS 10,000 AIdeas Competition | Daily Life Enhancement
 
 **Animated fork visualization.** An SVG showing two diverging life paths with milestone nodes at Year 1, 3, 5, 10, and Deathbed. Click milestones to see snapshots.
 
-**Sentiment analysis.** Amazon Comprehend tracks emotional tone shifts across rounds for each path.
+**Sentiment analysis (scaffolded).** When Amazon Comprehend is available, emotional tone shifts per round are tracked for each path. On the current deployment this tab is hidden until Comprehend access is restored.
 
 **Shareable links.** Share any debate as a read-only URL. Judges, friends, or your therapist can see the full debate.
 
@@ -39,27 +39,28 @@ Team Sic Mundus | AWS 10,000 AIdeas Competition | Daily Life Enhancement
 
 **Decision journal.** Every debate is logged. Record which path you chose. Reflect with satisfaction ratings over time.
 
-## The Stack (14 AWS Services)
+## The Stack
 
-| Layer | Tech |
-|-------|------|
-| Frontend | React 18, Vite, Tailwind CSS 4, Framer Motion, Recharts |
-| Backend | FastAPI, Strands Agents SDK, Pydantic |
-| AI Models | Amazon Bedrock (Nova Pro v1, Nova Lite v1) |
-| RAG | Bedrock Knowledge Bases (S3 data source) |
-| Safety | Bedrock Guardrails + custom regex defense-in-depth |
-| Analytics | Amazon Comprehend (sentiment), Monte Carlo (financial) |
-| Voice | Amazon Polly Neural (TTS with SSML), Browser SpeechRecognition |
-| Email | Amazon SES (check-ins + results) |
-| Data | Amazon DynamoDB (debates, users, shared links) |
-| Auth | Amazon Cognito (OIDC, hosted UI) |
-| Compute | AWS Lambda (2 functions), Amazon API Gateway |
-| Hosting | Amazon S3 + CloudFront (OAC) |
-| Observability | AWS X-Ray (distributed tracing), CloudWatch (alarms) |
+Diverge was designed around a full AWS stack but currently runs in a leaner configuration while Bedrock model access, Comprehend, AgentCore Memory, and CloudFront are pending. All AWS integrations are scaffolded and will re-activate when account access is restored.
+
+| Layer | Live today | Scaffolded / pending access |
+|-------|------------|-----------------------------|
+| Frontend | React 18, Vite, Tailwind CSS 4, Framer Motion, Recharts — hosted on Vercel | CloudFront + S3 origin-access wiring |
+| Backend | FastAPI, Strands Agents SDK, Pydantic v2 — served via AWS Lambda + API Gateway | |
+| AI models | OpenAI `gpt-4o-mini` (debate rounds, verdict, timeline) | Amazon Bedrock Nova Pro / Nova Lite |
+| RAG | Pre-curated resource library | Bedrock Knowledge Bases (S3 data source) |
+| Safety | Custom Python content guardrails + style validator with rewrite loop | Bedrock Guardrails (provider-side) |
+| Analytics | Monte Carlo financial simulation (Python) | Amazon Comprehend sentiment |
+| Voice | Browser `SpeechRecognition`, Web Speech TTS | Amazon Polly Neural + SSML |
+| Email | Amazon SES (check-ins + results) | |
+| Data | Amazon DynamoDB (debates, users, sessions, shared links, interjections, finalization progress) | |
+| Auth | Amazon Cognito (OIDC, hosted UI) | |
+| Memory | Per-session DynamoDB state with checkpointed resume | AgentCore Memory persistence |
+| Observability | CloudWatch logs + alarms | AWS X-Ray tracing |
 
 ## Local Development
 
-Prerequisites: Python 3.12+, Node.js 18+, AWS credentials configured, Amazon Bedrock model access enabled.
+Prerequisites: Python 3.12+, Node.js 18+, an OpenAI API key (default provider). AWS credentials are required only if you are exercising SES, DynamoDB, Cognito, or Bedrock-backed paths.
 
 Backend:
 ```bash

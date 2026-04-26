@@ -69,6 +69,44 @@ def _bedrock_search(query: str, kb_id: str, top_k: int = 3) -> list[dict]:
         return []
 
 
+def _fetch_chunks(query: str, category: str, top_k: int) -> list[dict]:
+    """Shared fetch path: try Bedrock KB first, fall back to local chunks."""
+    from app.config import get_settings
+    settings = get_settings()
+
+    results: list[dict] = []
+    if settings.kb_id:
+        results = _bedrock_search(query, settings.kb_id, top_k=top_k)
+
+    if not results:
+        results = _local_search(query, category, top_k=top_k)
+
+    return results
+
+
+def _retrieve_research_content(query: str, category: str, top_k: int = 1) -> str:
+    """Return concatenated chunk content WITHOUT [Source: ...] prefixes.
+
+    Used by the pre-retrieval grounding pipeline (backend/app/grounding.py) so
+    the resulting blob can be injected directly into a system prompt without
+    surfacing internal source paths to the model. Returns the sentinel string
+    "No research data found for: <query>" when nothing matches, mirroring the
+    behavior of the @tool wrapper below.
+    """
+    results = _fetch_chunks(query, category, top_k)
+    if not results:
+        return f"No research data found for: {query}"
+
+    output_parts: list[str] = []
+    for r in results:
+        content = r.get("content", "")
+        if len(content) > 800:
+            content = content[:800] + "..."
+        output_parts.append(content)
+
+    return "\n\n---\n\n".join(output_parts)
+
+
 @tool
 def research_insight(query: str, category: str) -> str:
     """Look up real-world research and statistics relevant to a decision.
@@ -81,16 +119,7 @@ def research_insight(query: str, category: str) -> str:
         query: What to look up (e.g. "startup failure rate", "habit formation time")
         category: Decision category (career, startup, relationship, health, education, general)
     """
-    from app.config import get_settings
-    settings = get_settings()
-
-    results = []
-    if settings.kb_id:
-        results = _bedrock_search(query, settings.kb_id)
-
-    if not results:
-        results = _local_search(query, category)
-
+    results = _fetch_chunks(query, category, top_k=3)
     if not results:
         return f"No research data found for: {query}"
 

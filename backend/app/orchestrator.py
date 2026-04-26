@@ -49,6 +49,7 @@ from app.schemas import (
 from app.tools.monte_carlo import monte_carlo_financial
 from app.tools.data_tools import get_salary_data, compare_cost_of_living, calculate_runway
 from app.tools.knowledge import research_insight
+from app.grounding import build_grounding_context
 from app.security.llm_security import validate_agent_output, validate_safe_content
 from app.tools.comprehend import analyze_round_sentiment
 
@@ -86,7 +87,6 @@ _SLOP_PHRASES = [
     (re.compile(r"\bInterestingly,?\s*", re.I), ""),
     (re.compile(r"\bCrucially,?\s*", re.I), ""),
     (re.compile(r"\bImportantly,?\s*", re.I), ""),
-    (re.compile(r"\bnavigate(?:d|s)?\s+(?:the\s+)?(?:challenges?|complexit(?:y|ies)|landscape)", re.I), "deal with it"),
     (re.compile(r"\bunpack\s+(?:this|that|it)", re.I), "explain it"),
     (re.compile(r"\blean(?:ed|ing|s)?\s+into\b", re.I), "embraced"),
     (re.compile(r"\bdouble(?:d|s)?\s+down\s+on\b", re.I), "committed to"),
@@ -324,11 +324,28 @@ def _pop_interjection(debate_id: str) -> str | None:
     return None
 
 
-def _make_model(max_tokens: int | None = None, temperature: float | None = None):
-    """Create a model instance based on the configured provider (openai or bedrock)."""
+def _make_model(
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    persona_label: str | None = None,
+):
+    """Create a model instance based on the configured provider (openai or bedrock).
+
+    If `temperature` is not provided, a persona-aware temperature is used:
+      challenger => 0.9 (more variety, punchier fragments)
+      defender   => 0.55 (more measured, patient sentences)
+    Falling back to the global debate_temperature for helpers with no persona.
+    """
     s = get_settings()
     tokens = max_tokens or s.debate_max_tokens
-    temp = temperature if temperature is not None else s.debate_temperature
+    if temperature is not None:
+        temp = temperature
+    elif persona_label == "challenger":
+        temp = 0.9
+    elif persona_label == "defender":
+        temp = 0.55
+    else:
+        temp = s.debate_temperature
 
     if s.model_provider == "openai":
         from strands.models.openai import OpenAIModel
@@ -784,7 +801,7 @@ def _run_round(
                     validate_agent_output(
                         _safe_agent_output(
                             Agent(
-                                model=_make_model(),
+                                model=_make_model(persona_label=alpha_persona["label"]),
                                 system_prompt=alpha_system_prompt,
                                 tools=tools,
                             )(_append_rewrite_instruction(alpha_input, rewrite_instruction))
@@ -822,7 +839,7 @@ def _run_round(
                     validate_agent_output(
                         _safe_agent_output(
                             Agent(
-                                model=_make_model(),
+                                model=_make_model(persona_label=beta_persona["label"]),
                                 system_prompt=beta_system_prompt,
                                 tools=tools,
                             )(_append_rewrite_instruction(beta_input, rewrite_instruction))
@@ -964,6 +981,7 @@ def run_debate(user_context: dict) -> DebateResponse:
     )
     user_context["debate_id"] = debate_id
     user_context["_category"] = category
+    build_grounding_context(user_context, category)
     alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
@@ -1050,6 +1068,7 @@ def run_debate_streaming(user_context: dict):
     )
     user_context["debate_id"] = debate_id
     user_context["_category"] = category
+    build_grounding_context(user_context, category)
     alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
@@ -1163,7 +1182,7 @@ def _run_round_split(
                     validate_agent_output(
                         _safe_agent_output(
                             Agent(
-                                model=_make_model(),
+                                model=_make_model(persona_label=alpha_persona["label"]),
                                 system_prompt=alpha_system_prompt,
                                 tools=tools,
                             )(_append_rewrite_instruction(alpha_input, rewrite_instruction))
@@ -1221,7 +1240,7 @@ def _run_round_split(
                         validate_agent_output(
                             _safe_agent_output(
                                 Agent(
-                                    model=_make_model(),
+                                    model=_make_model(persona_label=beta_persona["label"]),
                                     system_prompt=beta_system_prompt,
                                     tools=tools,
                                 )(_append_rewrite_instruction(beta_input, rewrite_instruction))
@@ -1380,6 +1399,7 @@ def run_debate_token_streaming(user_context: dict):
     )
     user_context["debate_id"] = debate_id
     user_context["_category"] = category
+    build_grounding_context(user_context, category)
     alpha_persona, beta_persona = _assign_personas(user_context["path_a"], user_context["path_b"])
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
@@ -1402,6 +1422,7 @@ def run_debate_token_streaming(user_context: dict):
         interjection = _pop_interjection(debate_id) if i > 0 else None
         if interjection:
             debate_summary += f"\n[User interjects]: {interjection}\n"
+            user_context.setdefault("_interjections", []).append(interjection)
             yield {
                 "type": "interjection",
                 "round": i + 1,

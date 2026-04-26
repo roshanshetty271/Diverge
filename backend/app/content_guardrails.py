@@ -26,6 +26,7 @@ ATTACK_DOG_PATTERNS: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
     "banned_cliche": re.compile(r"\bgilded cage\b", re.IGNORECASE),
+    "banned_verb_navigate": re.compile(r"\bnavigat(?:e|ed|ing|es)\b", re.IGNORECASE),
 }
 
 MOTIF_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -34,6 +35,11 @@ MOTIF_PATTERNS: dict[str, re.Pattern[str]] = {
     "buzzing_office": re.compile(r"\bbuzz(?:ing)? of (?:voices|ideas|coworkers|excited voices)\b", re.IGNORECASE),
     "racing_heart": re.compile(r"\b(?:heart races|heart racing|pulse races|pulse racing)\b", re.IGNORECASE),
     "weight_in_my_chest": re.compile(r"\bweight in my chest\b", re.IGNORECASE),
+    "template_opener": re.compile(
+        r"^\s*(?:Right now[,:]?\s+)?I['\u2019]?m\s+(?:in|at|sitting|standing|leaning|lying|perched)\b[^.!?\n]*[.!?]"
+        r"|^\s*(?:Sitting|Standing|Leaning|Lying|Perched)\s+(?:in|at|on|against|by|beside|across)\b[^.!?\n]*[.!?]",
+        re.IGNORECASE | re.MULTILINE,
+    ),
 }
 
 MOTIF_REPLACEMENTS: dict[str, tuple[tuple[re.Pattern[str], str], ...]] = {
@@ -41,7 +47,6 @@ MOTIF_REPLACEMENTS: dict[str, tuple[tuple[re.Pattern[str], str], ...]] = {
         (re.compile(r"\bcoffee shop\b", re.IGNORECASE), "quiet corner"),
         (re.compile(r"\bcoffeehouse\b", re.IGNORECASE), "quiet corner"),
         (re.compile(r"\bcaf(?:e|\u00e9)\b", re.IGNORECASE), "quiet corner"),
-        (re.compile(r"\bcoffee\b", re.IGNORECASE), "warm drink"),
     ),
     "sunlit_room": (
         (re.compile(r"\bsunlit kitchen\b", re.IGNORECASE), "familiar kitchen"),
@@ -53,10 +58,10 @@ MOTIF_REPLACEMENTS: dict[str, tuple[tuple[re.Pattern[str], str], ...]] = {
         (re.compile(r"\bbuzz(?:ing)? of (?:voices|ideas|coworkers|excited voices)\b", re.IGNORECASE), "office noise around me"),
     ),
     "racing_heart": (
-        (re.compile(r"\bheart races\b", re.IGNORECASE), "my chest tightens"),
-        (re.compile(r"\bheart racing\b", re.IGNORECASE), "my chest tightening"),
-        (re.compile(r"\bpulse races\b", re.IGNORECASE), "my pulse kicks up"),
-        (re.compile(r"\bpulse racing\b", re.IGNORECASE), "my pulse kicking up"),
+        (re.compile(r"\b(?:my\s+)?heart races\b", re.IGNORECASE), "my chest tightens"),
+        (re.compile(r"\b(?:my\s+)?heart racing\b", re.IGNORECASE), "my chest tightening"),
+        (re.compile(r"\b(?:my\s+)?pulse races\b", re.IGNORECASE), "my pulse kicks up"),
+        (re.compile(r"\b(?:my\s+)?pulse racing\b", re.IGNORECASE), "my pulse kicking up"),
     ),
     "weight_in_my_chest": (
         (re.compile(r"\bweight in my chest\b", re.IGNORECASE), "tension sitting in me"),
@@ -273,7 +278,16 @@ def validate_generated_text(
         violations.append(ContentViolation("invented_location", f'Introduced unsupported location "{location}".'))
 
     motif_hits = _count_motifs(text)
+    if motif_hits.get("template_opener"):
+        violations.append(
+            ContentViolation(
+                "template_opener",
+                "Response opens with generic 'I'm in/at/sitting' setting-establishment template.",
+            )
+        )
     for motif, count in motif_hits.items():
+        if motif == "template_opener":
+            continue
         if MOTIF_PATTERNS[motif].search(profile.user_language):
             continue
         if profile.motif_counts.get(motif, 0) > 0:
