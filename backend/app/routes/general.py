@@ -236,9 +236,9 @@ def health_check(request: Request):
         deps["dynamodb"] = f"error: {type(e).__name__}"
 
     if settings.model_provider == "openai":
-        deps["llm"] = "openai" if settings.openai_api_key else "error: no API key"
+        deps["llm"] = "ok" if settings.openai_api_key else "error: no API key"
     else:
-        deps["llm"] = "bedrock" if _service_check("bedrock", settings, call="bedrock") else "error: unavailable"
+        deps["llm"] = "ok" if _service_check("bedrock", settings, call="bedrock") else "error: unavailable"
 
     if settings.cognito_user_pool_id:
         try:
