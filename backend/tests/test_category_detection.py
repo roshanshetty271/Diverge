@@ -11,14 +11,14 @@ def test_template_id_overrides_text_classification_when_paths_still_match_templa
     assert category == "relationship"
 
 
-def test_valid_template_id_stays_source_of_truth_even_when_paths_change():
+def test_valid_template_id_yields_to_text_when_paths_change():
     category = detect_decision_category(
         "Stay employed",
         "Launch the startup",
         template_id="relationship",
     )
 
-    assert category == "relationship"
+    assert category == "startup"
 
 
 def test_unknown_template_id_falls_back_to_text_classification():

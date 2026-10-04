@@ -330,6 +330,7 @@ def format_violation_report(result: ValidationResult) -> str:
         f"{motif_line}"
         "- Keep the scene grounded and generic when context is sparse.\n"
         "- Do not add new people, places, money outcomes, or property details.\n"
+        "- Open with a plain thought or action, not a setting-establishment sentence.\n"
         "- Do not use aggressive opener phrases or familiar coffee/sunlight cliches."
     )
 
@@ -341,6 +342,7 @@ def strict_grounding_rewrite_brief() -> str:
         "- Rewrite from scratch using only grounded, generic details.\n"
         "- No named people, named places, exact money amounts, children, partners, property, or diagnoses unless explicitly provided.\n"
         "- No attack-dog phrasing. No cliches like coffee, sunlit kitchen, buzzing office, racing heart, weight in my chest, or gilded cage.\n"
+        "- Open with a thought or action, not a setting. Write 70-110 words, like a late-night voice memo.\n"
         "- Keep the tradeoff honest, concise, and plausible."
     )
 

@@ -18,7 +18,7 @@ Globals:
         DIVERGE_OPENAI_API_KEY: !Ref OpenAIApiKey
         DIVERGE_COMPREHEND_ENABLED: !Ref EnableComprehend
         DIVERGE_DEBUG: "false"
-        DIVERGE_RATE_LIMITING_ENABLED: "false"
+        DIVERGE_RATE_LIMITING_ENABLED: "true"
         DIVERGE_PUBLIC_APP_URL: !Ref PublicAppUrl
         DIVERGE_TURNSTILE_SECRET_KEY: !Ref TurnstileSecretKey
 
@@ -56,10 +56,37 @@ Parameters:
   PublicAppUrl:
     Type: String
     Default: ""
+  # Custom domain (optional). Leave blank to use the default *.cloudfront.net URL.
+  # Example: DomainName=diverge.app, HostedZoneId=Z123ABC (from Route 53).
+  DomainName:
+    Type: String
+    Default: ""
+  HostedZoneId:
+    Type: String
+    Default: ""
+  # Cost guardrails. Lower = safer; raise only if you expect more traffic.
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 10
+    Description: Monthly USD budget cap. Email alerts fire at 50%, 80%, and 100% forecasted.
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Email for budget + Lambda + Bedrock alarm notifications. Leave blank to skip the email subscription and budget emails.
+  MaxConcurrentDebates:
+    Type: Number
+    Default: 30
+    Description: Reserved concurrency cap on DebateFunction. Set to 0 to disable. Bump higher (e.g. 100) via -MaxConcurrentDebates flag if going viral. Requires account Lambda concurrency >= MaxConcurrentDebates + 10.
 
 Conditions:
   CreateCloudFront: !Equals [!Ref EnableCloudFront, "true"]
   HasPublicAppUrl: !Not [!Equals [!Ref PublicAppUrl, ""]]
+  HasCustomDomain: !Not [!Equals [!Ref DomainName, ""]]
+  HasHostedZone: !And
+    - !Not [!Equals [!Ref DomainName, ""]]
+    - !Not [!Equals [!Ref HostedZoneId, ""]]
+  EnableConcurrencyCap: !Not [!Equals [!Ref MaxConcurrentDebates, 0]]
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
 
 Resources:
   # ── Cognito ────────────────────────────────────────────────────
@@ -190,6 +217,10 @@ Resources:
       Timeout: 300
       MemorySize: 1024
       Tracing: Active
+      ReservedConcurrentExecutions: !If
+        - EnableConcurrencyCap
+        - !Ref MaxConcurrentDebates
+        - !Ref AWS::NoValue
       FunctionUrlConfig:
         AuthType: NONE
       Environment:
@@ -438,6 +469,21 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
+  # ── Custom Domain (optional) ──────────────────────────────────
+  # ACM cert for CloudFront MUST be in us-east-1 (which is where this stack lives).
+  # Cert uses DNS validation; if HostedZoneId is provided, validation is automated.
+  CustomDomainCertificate:
+    Condition: HasCustomDomain
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions: !If
+        - HasHostedZone
+        - - DomainName: !Ref DomainName
+            HostedZoneId: !Ref HostedZoneId
+        - !Ref AWS::NoValue
+
   # ── CloudFront CDN ────────────────────────────────────────────
   # NOTE: Requires account verification. Deploy will fail if not verified.
   # Comment out this section if CloudFront is blocked.
@@ -459,6 +505,16 @@ Resources:
         Enabled: true
         DefaultRootObject: index.html
         HttpVersion: http2and3
+        Aliases: !If
+          - HasCustomDomain
+          - [!Ref DomainName]
+          - !Ref AWS::NoValue
+        ViewerCertificate: !If
+          - HasCustomDomain
+          - AcmCertificateArn: !Ref CustomDomainCertificate
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - !Ref AWS::NoValue
         Origins:
           - Id: S3Origin
             DomainName: !GetAtt FrontendBucket.RegionalDomainName
@@ -527,21 +583,89 @@ Resources:
               StringEquals:
                 "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
 
-  # ── Budget Alerts ──────────────────────────────────────────────
+  # ── Route 53 A-Alias to CloudFront (only when HostedZoneId is provided) ──
+  # CloudFront's hosted zone ID is the global Z2FDTNDATAQYW2.
+  CustomDomainAliasRecord:
+    Condition: HasHostedZone
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+  # ── Budget + Alarm Notifications ──────────────────────────────
+  # SNS topic that receives alarm + budget notifications and forwards by email.
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "diverge-${Stage}-alerts"
+      DisplayName: Diverge Alerts
+      Subscription: !If
+        - HasAlertEmail
+        - - Endpoint: !Ref AlertEmail
+            Protocol: email
+        - !Ref AWS::NoValue
+
+  # Hard monthly cost cap. Email at 50%, 80%, and on forecasted overspend.
+  # Forecasted alert is the early-warning: AWS predicts you'll overrun before you do.
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub "diverge-${Stage}-monthly"
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+        TimeUnit: MONTHLY
+        BudgetType: COST
+      NotificationsWithSubscribers: !If
+        - HasAlertEmail
+        - - Notification:
+              NotificationType: ACTUAL
+              ComparisonOperator: GREATER_THAN
+              Threshold: 50
+              ThresholdType: PERCENTAGE
+            Subscribers:
+              - SubscriptionType: EMAIL
+                Address: !Ref AlertEmail
+          - Notification:
+              NotificationType: ACTUAL
+              ComparisonOperator: GREATER_THAN
+              Threshold: 80
+              ThresholdType: PERCENTAGE
+            Subscribers:
+              - SubscriptionType: EMAIL
+                Address: !Ref AlertEmail
+          - Notification:
+              NotificationType: FORECASTED
+              ComparisonOperator: GREATER_THAN
+              Threshold: 100
+              ThresholdType: PERCENTAGE
+            Subscribers:
+              - SubscriptionType: EMAIL
+                Address: !Ref AlertEmail
+        - !Ref AWS::NoValue
+
   BedrockInvocationAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: diverge-bedrock-invocations-high
       AlarmDescription: >
-        Bedrock invocations exceeded 500/hour — potential abuse or runaway loop.
+        Bedrock invocations exceeded 100/hour — potential abuse or runaway loop.
       Namespace: AWS/Bedrock
       MetricName: Invocations
       Statistic: Sum
       Period: 3600
       EvaluationPeriods: 1
-      Threshold: 500
+      Threshold: 100
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
 
   LambdaErrorAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -559,6 +683,28 @@ Resources:
       Threshold: 10
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # Fires when concurrency cap is being hit — early signal of unusual load.
+  LambdaThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: diverge-debate-throttles
+      AlarmDescription: Debate Lambda is being throttled (concurrency cap hit).
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DebateFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
 
 Outputs:
   UserPoolId:
@@ -579,3 +725,9 @@ Outputs:
   CloudFrontDistributionId:
     Condition: CreateCloudFront
     Value: !Ref CloudFrontDistribution
+  CustomDomainUrl:
+    Condition: HasCustomDomain
+    Value: !Sub "https://${DomainName}"
+  CustomDomainCertificateArn:
+    Condition: HasCustomDomain
+    Value: !Ref CustomDomainCertificate

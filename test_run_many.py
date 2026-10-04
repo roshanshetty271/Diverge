@@ -10,8 +10,17 @@ import requests
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DEBATE_BASE = "https://nj4y3i5l3ezxlr2cu2k2lemcn40qghrk.lambda-url.us-east-1.on.aws"
+DEBATE_BASE = "https://d1re6fh5kw2kbg.cloudfront.net"
 TIMEOUT = 300
+
+ROBOTIC_FALLBACK_PATTERNS = [
+    "Right now, living with",
+    "This path gives something real",
+    "The tradeoff behind this",
+    "Nothing here is clean",
+    "version of life you would have to keep waking up inside",
+    "This perspective could not be generated",
+]
 
 SCENARIOS = [
     {
@@ -85,6 +94,7 @@ def run_scenario(scenario: dict) -> dict:
         "input": inp,
         "interjection": {"after_round": inj_round, "text": inj_text},
         "rounds": [],
+        "quality_warnings": [],
     }
 
     total_start = time.time()
@@ -134,12 +144,26 @@ def run_scenario(scenario: dict) -> dict:
     out["resources"] = data.get("resources", [])
     out["total_elapsed_s"] = round(time.time() - total_start, 2)
     out["total_elapsed_min"] = round(out["total_elapsed_s"] / 60, 2)
+    out["quality_warnings"] = find_quality_warnings(out)
 
     Path("test_results").mkdir(exist_ok=True)
     (Path("test_results") / f"{name}_live.json").write_text(
         json.dumps(out, indent=2, default=str), encoding="utf-8"
     )
     return out
+
+
+def find_quality_warnings(result: dict) -> list[str]:
+    warnings = []
+    for rd in result.get("rounds", []):
+        for side in ("alpha", "beta"):
+            text = rd.get(side, "")
+            for pattern in ROBOTIC_FALLBACK_PATTERNS:
+                if pattern in text:
+                    warnings.append(
+                        f"R{rd['round']} {side} matched robotic fallback pattern: {pattern!r}"
+                    )
+    return warnings
 
 
 def main():
@@ -157,16 +181,24 @@ def main():
                 results.append({"scenario": name, "error": str(e)})
 
     print("\n===== SUMMARY =====")
+    had_quality_warnings = False
     for r in sorted(results, key=lambda x: x.get("scenario", "")):
         if "error" in r:
             print(f"  {r['scenario']}: FAILED - {r['error']}")
             continue
         rounds = " / ".join(f"{rd['elapsed_s']:.0f}s" for rd in r["rounds"])
+        quality = "WARN" if r.get("quality_warnings") else "PASS"
+        had_quality_warnings = had_quality_warnings or bool(r.get("quality_warnings"))
         print(
             f"  {r['scenario']:<30} total={r['total_elapsed_s']:.1f}s  "
             f"rounds={rounds}  verdict={len(r['verdict'])}ch  "
-            f"timeline={'Y' if r['timeline'] else 'N'}"
+            f"timeline={'Y' if r['timeline'] else 'N'}  quality={quality}"
         )
+        for warning in r.get("quality_warnings", []):
+            print(f"    QUALITY: {warning}")
+
+    if any("error" in r for r in results) or had_quality_warnings:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
