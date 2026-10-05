@@ -360,7 +360,8 @@ export async function continueDebateStream(
     const res = await fetch(`${DEBATE_BASE}/api/debate/session/${debateId}/continue-stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ interjection: interjection || null }),
+      // round_number lets the backend replay the stored round on a duplicate click.
+      body: JSON.stringify({ interjection: interjection || null, round_number: existingRounds.length + 1 }),
       signal: abortCtrl.signal,
     });
 

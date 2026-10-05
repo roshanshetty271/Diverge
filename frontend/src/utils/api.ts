@@ -97,10 +97,11 @@ export async function startCheckpointedDebate(
 export async function continueCheckpointedDebate(
   debateId: string,
   interjection?: string,
+  roundNumber?: number,
 ): Promise<CheckpointedDebateResponse> {
   return apiFetch<CheckpointedDebateResponse>(`${CHECKPOINTED_BASE}/api/debate/session/${debateId}/continue`, {
     method: "POST",
-    body: JSON.stringify({ interjection: interjection || null }),
+    body: JSON.stringify({ interjection: interjection || null, round_number: roundNumber ?? null }),
     _timeout: DEBATE_TIMEOUT_MS,
   });
 }
@@ -193,9 +194,16 @@ export async function reflectOnDebate(debateId: string, satisfaction: number, no
   });
 }
 
-export async function submitFeedback(debateId: string, rating: string, quote: string): Promise<{ status: string }> {
+export async function submitFeedback(
+  debateId: string,
+  rating: string,
+  quote: string,
+  token?: string | null,
+): Promise<{ status: string }> {
   return apiFetch<{ status: string }>(`${API_BASE}/api/debate/${debateId}/feedback`, {
     method: "POST",
     body: JSON.stringify({ rating, quote }),
+    // Debates saved to an account only accept feedback from that account.
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
 }

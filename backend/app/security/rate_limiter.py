@@ -1,114 +1,136 @@
 """Rate limiting for Diverge API.
 
-Kiro audit fixes:
-- #10: DynamoDB-based instead of in-memory (persists across Lambda cold starts)
-- #12.1: Fail-closed on errors (deny on DB failure, not allow)
-- #10.2: avoid trusting spoofable forwarding headers on public endpoints
+- Counters live in DynamoDB so limits hold across Lambda instances.
+- Each (client, endpoint, window) gets one counter item that is incremented
+  with a single conditional UpdateItem, so concurrent requests cannot both
+  slip under the limit.
+- Client keys are HMAC-SHA256 digests: stable across processes and cold
+  starts, and raw IPs or user ids never end up in the table.
+- Signed-in users are keyed by their Cognito `sub`; anonymous clients by IP.
+- If the counter store fails, requests are refused with 503 (fail closed).
 """
 
-import time
+import hashlib
+import hmac
 import logging
+import time
+
 import boto3
-from datetime import datetime, timezone, timedelta
-from boto3.dynamodb.conditions import Key
-from fastapi import Request, HTTPException
+from botocore.exceptions import ClientError
+from fastapi import HTTPException, Request
 
 from app.config import get_settings
 
 logger = logging.getLogger("diverge.security.ratelimit")
 
-# Fallback in-memory store (used only if DynamoDB is unavailable AND fail-open is enabled)
-_fallback_log: dict[str, list[float]] = {}
+# Used only when DIVERGE_RATE_LIMIT_HASH_KEY is not configured.
+_FALLBACK_HASH_KEY = "diverge-rate-limit-v1"
 
-# DynamoDB rate limit table — created as part of the debates table GSI
-# We use a dedicated partition key prefix "ratelimit#" to avoid collision
+# Paths that must never be rate limited (load balancer / uptime probes).
+EXEMPT_PATHS = frozenset({"/api/health"})
+
+# In-memory store used for local development (debug mode or no table).
+_fallback_log: dict[str, tuple[int, int]] = {}
 
 
-def _get_client_ip(request: Request) -> str:
-    """Extract a stable client fingerprint without trusting spoofable headers.
+class RateLimitStoreError(Exception):
+    """The rate limit counter store could not be reached."""
 
-    Vercel/AWS already terminates TLS and forwards the real client address into
-    `request.client.host`. Browsers cannot set that value directly, while tools
-    like curl can spoof `X-Forwarded-For` against public endpoints. For a public
-    app, it's safer to ignore forwarding headers unless a trusted proxy layer is
-    explicitly enforcing them.
+
+def _hash_key() -> bytes:
+    return (get_settings().rate_limit_hash_key or _FALLBACK_HASH_KEY).encode("utf-8")
+
+
+def stable_digest(value: str) -> str:
+    """Keyed, process-independent digest used for rate-limit keys and log fields."""
+    return hmac.new(_hash_key(), value.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
+def _first_forwarded_ip(header_value: str) -> str:
+    return header_value.split(",")[0].strip()
+
+
+def get_client_ip(request: Request) -> str:
+    """Return the best available client IP for keying anonymous requests.
+
+    Traffic from the Vercel frontend reaches Lambda through Vercel's rewrite
+    proxy, so the TCP peer (`request.client.host`, taken from the Lambda
+    request context) is a shared Vercel egress address. Vercel overwrites
+    `x-vercel-forwarded-for` with the address it received the request from,
+    so a browser cannot spoof it through Vercel. Direct callers of the public
+    Function URL can still set that header themselves; closing that gap needs
+    the Function URL to be private.
+
+    Requests that did not come through Vercel are keyed by the peer address
+    reported by AWS. Generic `X-Forwarded-For` and the user agent are never
+    used.
     """
+    vercel_forwarded = request.headers.get("x-vercel-forwarded-for", "")
+    if vercel_forwarded:
+        ip = _first_forwarded_ip(vercel_forwarded)
+        if ip:
+            return ip
+
     if request.client and request.client.host:
-        ip = request.client.host
-    else:
-        ip = "unknown"
-    
-    # Enhanced fingerprinting: combine IP with browser fingerprint
-    # This makes IP rotation attacks harder while being transparent to users
-    user_agent = request.headers.get("user-agent", "")[:100]  # Limit length
-    accept_lang = request.headers.get("accept-language", "")[:50]
-    
-    # Create a composite key that's harder to spoof
-    fingerprint = f"{ip}:{hash(user_agent + accept_lang) % 10000}"
-    return fingerprint
+        return request.client.host
+    return "unknown"
+
+
+def client_ip_hash(request: Request) -> str:
+    """Hashed client IP, safe to write to logs."""
+    return stable_digest(f"ip:{get_client_ip(request)}")[:16]
+
+
+def _window_bounds(window_seconds: int, now: float | None = None) -> tuple[int, int]:
+    now = time.time() if now is None else now
+    window_start = int(now // window_seconds) * window_seconds
+    return window_start, window_start + window_seconds
+
+
+def _get_rate_limit_table():
+    settings = get_settings()
+    dynamodb = boto3.resource("dynamodb", region_name=settings.aws_region)
+    return dynamodb.Table(settings.debates_table)
 
 
 def _check_dynamodb_rate(client_key: str, max_requests: int, window_seconds: int) -> bool:
-    """Check rate limit using DynamoDB.
+    """Atomically count this request in the current window.
 
-    Uses the debates table with a synthetic item:
-    PK = "ratelimit#<client_key>", created_at = ISO timestamp.
-    Queries the user-debates-index GSI.
-
-    Returns True if under limit, False if over.
+    Returns True if the request is within the limit, False if over it.
+    Raises RateLimitStoreError if DynamoDB fails.
     """
-    settings = get_settings()
-
+    window_start, window_end = _window_bounds(window_seconds)
     try:
-        dynamodb = boto3.resource("dynamodb", region_name=settings.aws_region)
-        table = dynamodb.Table(settings.debates_table)
-        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds)).isoformat()
-
-        # Count recent requests for this client
-        response = table.query(
-            IndexName="user-debates-index",
-            KeyConditionExpression=(
-                Key("user_id").eq(f"ratelimit#{client_key}")
-                & Key("created_at").gt(cutoff)
-            ),
-            Select="COUNT",
+        table = _get_rate_limit_table()
+        table.update_item(
+            Key={"debate_id": f"ratelimit#{client_key}#{window_start}"},
+            UpdateExpression="ADD #count :one SET #ttl = :ttl",
+            ConditionExpression="attribute_not_exists(#count) OR #count < :limit",
+            ExpressionAttributeNames={"#count": "request_count", "#ttl": "ttl"},
+            ExpressionAttributeValues={
+                ":one": 1,
+                ":limit": max_requests,
+                ":ttl": window_end + 60,  # Auto-cleanup via DynamoDB TTL
+            },
         )
-        count = response.get("Count", 0)
-
-        if count >= max_requests:
-            return False
-
-        # Record this request
-        import uuid
-        table.put_item(Item={
-            "debate_id": f"rl-{uuid.uuid4()}",
-            "user_id": f"ratelimit#{client_key}",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "ttl": int(time.time()) + window_seconds + 60,  # Auto-cleanup via DynamoDB TTL
-        })
-
         return True
-
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise RateLimitStoreError(type(e).__name__) from e
     except Exception as e:
-        logger.error(f"DynamoDB rate limit check failed: {e}")
-        # Kiro audit #12.1: FAIL CLOSED — deny on error
-        return False
+        raise RateLimitStoreError(type(e).__name__) from e
 
 
 def _check_memory_rate(client_key: str, max_requests: int, window_seconds: int) -> bool:
-    """Fallback in-memory rate limiter (for local dev without DynamoDB)."""
-    now = time.time()
-    cutoff = now - window_seconds
-
-    entries = _fallback_log.get(client_key, [])
-    entries = [t for t in entries if t > cutoff]
-
-    if len(entries) >= max_requests:
-        _fallback_log[client_key] = entries
+    """In-memory fixed-window limiter for local development."""
+    window_start, _ = _window_bounds(window_seconds)
+    stored_window, count = _fallback_log.get(client_key, (window_start, 0))
+    if stored_window != window_start:
+        count = 0
+    if count >= max_requests:
         return False
-
-    entries.append(now)
-    _fallback_log[client_key] = entries
+    _fallback_log[client_key] = (window_start, count + 1)
     return True
 
 
@@ -118,43 +140,49 @@ def check_rate_limit(
     window_seconds: int = 3600,
     endpoint: str = "default",
     identity: str | None = None,
+    user: dict | None = None,
 ) -> None:
-    """Check if the client has exceeded the rate limit.
+    """Raise 429 if the caller is over the limit, 503 if the limit can't be checked.
 
-    Uses DynamoDB in production, falls back to in-memory for local dev.
-    Implements exponential backoff for repeated violations.
-    Raises HTTPException 429 if limit exceeded.
+    `identity` (or the signed-in `user`) keys the limit to an account; otherwise
+    the client IP is used.
     """
     settings = get_settings()
 
     if not settings.rate_limiting_enabled:
-        logger.info("Rate limiting disabled; skipping check for %s", endpoint)
+        logger.debug("Rate limiting disabled; skipping check for %s", endpoint)
         return
 
-    subject = identity or _get_client_ip(request)
-    client_key = f"{subject}:{endpoint}"
+    if request.url.path in EXEMPT_PATHS:
+        return
 
-    # Use DynamoDB if debates table is configured (production)
-    if settings.debates_table and not settings.debug:
-        allowed = _check_dynamodb_rate(client_key, max_requests, window_seconds)
-    else:
-        # Local dev: in-memory fallback
-        allowed = _check_memory_rate(client_key, max_requests, window_seconds)
+    if not identity and user and user.get("sub"):
+        identity = f"user:{user['sub']}"
+    subject = identity or f"ip:{get_client_ip(request)}"
+    client_key = f"{endpoint}#{stable_digest(subject)}"
+
+    try:
+        if settings.debates_table and not settings.debug:
+            allowed = _check_dynamodb_rate(client_key, max_requests, window_seconds)
+        else:
+            allowed = _check_memory_rate(client_key, max_requests, window_seconds)
+    except RateLimitStoreError as e:
+        logger.error("Rate limit store unavailable for %s: %s", endpoint, e)
+        raise HTTPException(
+            status_code=503,
+            detail="The service is temporarily unavailable. Please try again shortly.",
+            headers={"Retry-After": "30"},
+        ) from e
 
     if not allowed:
-        logger.warning(f"Rate limit exceeded for {client_key}")
-        
-        # Calculate retry-after with exponential backoff
-        # First violation: 1 hour, subsequent: increases
-        retry_after = min(window_seconds * 2, 7200)  # Cap at 2 hours
-        
+        _, window_end = _window_bounds(window_seconds)
+        retry_after = max(1, window_end - int(time.time()))
+        logger.warning("Rate limit exceeded for %s key=%s", endpoint, client_key)
         raise HTTPException(
             status_code=429,
             detail={
                 "error": "Rate limit exceeded",
-                "message": f"Maximum {max_requests} requests per hour. Please try again later or sign in for higher limits.",
+                "message": "Too many requests. Please try again later or sign in for higher limits.",
             },
             headers={"Retry-After": str(retry_after)},
         )
-
-    logger.info(f"Rate limit OK for {client_key}")

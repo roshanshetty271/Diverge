@@ -43,6 +43,8 @@ class InterjectionRequest(BaseModel):
 class DebateSessionContinueRequest(BaseModel):
     """Optional user interjection before the next checkpointed round."""
     interjection: Optional[str] = Field(None, max_length=500)
+    # Round the client expects to generate; repeats of an earlier round are replayed.
+    round_number: Optional[int] = Field(None, ge=1, le=20)
 
 
 class SaveDebateRequest(BaseModel):

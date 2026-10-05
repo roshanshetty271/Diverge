@@ -8,9 +8,25 @@ import logging
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+class SessionConflictError(Exception):
+    """A conditional session write lost to a concurrent request."""
+
+
+class DebateOwnershipError(Exception):
+    """The debate id already belongs to a different user."""
+
+
+def _is_conditional_failure(exc: Exception) -> bool:
+    return (
+        isinstance(exc, ClientError)
+        and exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException"
+    )
 
 # GSI name defined in template.yaml
 USER_DEBATES_INDEX = "user-debates-index"
@@ -74,12 +90,38 @@ def save_debate(debate_id: str, user_id: str, user_input: dict, debate_data: dic
     }
 
     try:
-        table.put_item(Item=_to_dynamodb_compatible(item))
+        # The debate id comes from the client: only create it, replace the
+        # caller's own item, or claim an anonymous session item.
+        table.put_item(
+            Item=_to_dynamodb_compatible(item),
+            ConditionExpression="attribute_not_exists(debate_id) OR user_id = :uid OR user_id = :anonymous",
+            ExpressionAttributeValues={":uid": user_id, ":anonymous": "anonymous"},
+        )
         logger.info(f"Saved debate {debate_id} for user {user_id}")
         return item
     except Exception as e:
+        if _is_conditional_failure(e):
+            logger.warning("Refused to overwrite debate %s owned by another user", debate_id)
+            raise DebateOwnershipError(debate_id) from e
         logger.error(f"Failed to save debate {debate_id}: {e}")
         raise
+
+
+def get_debate_owner(debate_id: str) -> str | None:
+    """Return the owner of a stored debate item, "anonymous" if it has none, or None if absent.
+
+    Errors propagate so callers can fail closed.
+    """
+    settings = get_settings()
+    table = _get_table(settings.debates_table)
+    response = table.get_item(
+        Key={"debate_id": debate_id},
+        ProjectionExpression="user_id",
+    )
+    item = response.get("Item")
+    if item is None:
+        return None
+    return item.get("user_id") or "anonymous"
 
 
 def get_user_debates(user_id: str, limit: int = 50, last_key: dict | None = None) -> dict:
@@ -202,8 +244,19 @@ def get_debate_session(debate_id: str) -> dict | None:
         return None
 
 
-def update_debate_session(debate_id: str, session_data: dict) -> dict:
-    """Update a checkpointed debate session item."""
+def update_debate_session(
+    debate_id: str,
+    session_data: dict,
+    expected_round_index: int | None = None,
+    expected_updated_at: str | None = None,
+) -> dict:
+    """Update a checkpointed debate session item.
+
+    With `expected_round_index`, the write only succeeds if the stored
+    `current_round_index` still equals it; otherwise SessionConflictError is
+    raised so a duplicate request cannot overwrite a round that already landed.
+    `expected_updated_at` works the same way on the `updated_at` timestamp.
+    """
     settings = get_settings()
     table = _get_table(settings.debates_table)
     now = datetime.now(timezone.utc)
@@ -220,16 +273,34 @@ def update_debate_session(debate_id: str, session_data: dict) -> dict:
             "updated_at": now.isoformat(),
             "ttl": int((now + timedelta(days=7)).timestamp()),
         }
-        table.put_item(Item=_to_dynamodb_compatible(item))
+        put_kwargs: dict = {"Item": _to_dynamodb_compatible(item)}
+        if expected_round_index is not None:
+            put_kwargs["ConditionExpression"] = "current_round_index = :expected"
+            put_kwargs["ExpressionAttributeValues"] = {":expected": expected_round_index}
+        elif expected_updated_at is not None:
+            put_kwargs["ConditionExpression"] = "updated_at = :expected_updated_at"
+            put_kwargs["ExpressionAttributeValues"] = {":expected_updated_at": expected_updated_at}
+        table.put_item(**put_kwargs)
         return item
     except Exception as e:
+        if _is_conditional_failure(e):
+            logger.info("Conditional update lost for session %s", debate_id)
+            raise SessionConflictError(debate_id) from e
         logger.error(f"Failed to update session {debate_id}: {e}")
         raise
 
 
-def complete_debate_session(debate_id: str, session_data: dict) -> dict:
+def complete_debate_session(
+    debate_id: str,
+    session_data: dict,
+    expected_round_index: int | None = None,
+) -> dict:
     """Mark a checkpointed session complete."""
-    return update_debate_session(debate_id, {"status": "complete", **session_data})
+    return update_debate_session(
+        debate_id,
+        {"status": "complete", **session_data},
+        expected_round_index=expected_round_index,
+    )
 
 
 def create_checkin_records(records: list[dict]) -> int:
@@ -286,26 +357,61 @@ def update_checkin_record(checkin_id: str, updates: dict) -> dict:
         raise
 
 
+# What the public share page (frontend SharedDebate.tsx) renders. Nothing else
+# from the debate input (finances, writing samples, name, age...) is stored or served.
+_SHARED_ROUND_FIELDS = ("round_number", "round_name", "round_title", "alpha", "beta", "status")
+
+
+def _public_share_view(item: dict) -> dict:
+    """Project a shared debate onto the fields the public page needs.
+
+    Applied when saving new shares and when serving any share, so older items
+    that stored the full input are served without it.
+    """
+    input_data = item.get("input") if isinstance(item.get("input"), dict) else {}
+    transcript = [
+        {field: round_data.get(field) for field in _SHARED_ROUND_FIELDS if field in round_data}
+        for round_data in (item.get("transcript") or [])
+        if isinstance(round_data, dict)
+    ]
+    metrics = [
+        {"path_a": entry.get("path_a"), "path_b": entry.get("path_b")} if isinstance(entry, dict) else None
+        for entry in (item.get("metrics") or [])
+    ]
+    return {
+        "share_id": item.get("share_id"),
+        "path_a": item.get("path_a") or input_data.get("path_a", ""),
+        "path_b": item.get("path_b") or input_data.get("path_b", ""),
+        "verdict": item.get("verdict", ""),
+        "transcript": transcript,
+        "metrics": metrics,
+        "completed_rounds": item.get("completed_rounds", len(transcript)),
+        "total_rounds": item.get("total_rounds", 5),
+        "created_at": item.get("created_at"),
+    }
+
+
 def save_shared_debate(share_id: str, debate_data: dict, user_input: dict) -> dict:
     """Save a debate for public sharing (no auth required to view)."""
     settings = get_settings()
     table = _get_table(settings.debates_table)
 
-    item = {
-        "debate_id": f"shared#{share_id}",
-        "user_id": "public",
+    public = _public_share_view({
         "share_id": share_id,
-        "is_public": True,
         "path_a": user_input.get("path_a", ""),
         "path_b": user_input.get("path_b", ""),
         "verdict": debate_data.get("verdict", ""),
         "transcript": debate_data.get("transcript", []),
         "metrics": debate_data.get("metrics", []),
-        "resources": debate_data.get("resources", []),
         "completed_rounds": debate_data.get("completed_rounds", 0),
         "total_rounds": debate_data.get("total_rounds", 5),
-        "input": user_input,
         "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    item = {
+        **public,
+        "debate_id": f"shared#{share_id}",
+        "user_id": "public",
+        "is_public": True,
         "ttl": int((datetime.now(timezone.utc) + timedelta(days=90)).timestamp()),
     }
 
@@ -319,7 +425,7 @@ def save_shared_debate(share_id: str, debate_data: dict, user_input: dict) -> di
 
 
 def get_shared_debate(share_id: str) -> dict | None:
-    """Retrieve a publicly shared debate."""
+    """Retrieve the public view of a shared debate."""
     settings = get_settings()
     table = _get_table(settings.debates_table)
 
@@ -327,7 +433,7 @@ def get_shared_debate(share_id: str) -> dict | None:
         response = table.get_item(Key={"debate_id": f"shared#{share_id}"})
         item = _from_dynamodb_compatible(response.get("Item"))
         if item and item.get("is_public"):
-            return item
+            return _public_share_view(item)
         return None
     except Exception as e:
         logger.error(f"Failed to get shared debate {share_id}: {e}")

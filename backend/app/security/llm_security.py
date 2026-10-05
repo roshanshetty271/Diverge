@@ -14,6 +14,7 @@ References:
 
 import re
 import logging
+import unicodedata
 
 logger = logging.getLogger("diverge.security.llm")
 
@@ -81,6 +82,40 @@ STRIP_PATTERNS = [
 
 COMPILED_STRIP = [re.compile(p, re.IGNORECASE | re.DOTALL) for p in STRIP_PATTERNS]
 
+# Any HTML/XML-looking tag (letters right after "<"), so "<3" or "<50k" survive.
+_MARKUP_TAG = re.compile(r"</?[A-Za-z][^<>]*>")
+
+# Unicode categories removed from user text: control, format (zero-width,
+# bidi overrides), surrogate, private-use and unassigned code points.
+_DROPPED_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn"})
+_KEPT_CONTROL_CHARS = frozenset({"\n", "\t"})
+
+# Latin look-alikes from Cyrillic and Greek, used only when matching injection
+# patterns so "ignore аll previous instructions" (Cyrillic а) is still caught.
+_CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x",
+    "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "ӏ": "l", "һ": "h", "ԛ": "q", "ԝ": "w",
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O",
+    "Р": "P", "С": "C", "Т": "T", "Х": "X", "І": "I", "Ј": "J", "Ѕ": "S",
+    "α": "a", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p",
+    "τ": "t", "υ": "u", "χ": "x", "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z",
+    "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O", "Ρ": "P",
+    "Τ": "T", "Υ": "Y", "Χ": "X",
+})
+
+
+def _strip_unsafe_chars(text: str) -> str:
+    return "".join(
+        ch for ch in text
+        if ch in _KEPT_CONTROL_CHARS or unicodedata.category(ch) not in _DROPPED_CATEGORIES
+    )
+
+
+def _injection_skeleton(text: str) -> str:
+    """Normalized form of `text` used only for injection pattern matching."""
+    return _strip_unsafe_chars(unicodedata.normalize("NFKC", text)).translate(_CONFUSABLES)
+
+
 # ── System prompt that must NOT appear in output ───────────────────
 
 SYSTEM_PROMPT_FRAGMENTS = [
@@ -103,8 +138,9 @@ def detect_injection(text: str) -> tuple[bool, str | None]:
     if not text:
         return False, None
 
+    skeleton = _injection_skeleton(text)
     for pattern in COMPILED_PATTERNS:
-        match = pattern.search(text)
+        match = pattern.search(text) or pattern.search(skeleton)
         if match:
             logger.warning(f"Injection pattern detected: '{match.group()}' in input")
             return True, match.group()
@@ -122,18 +158,15 @@ def sanitize_user_input(text: str) -> str:
     if not text:
         return ""
 
-    cleaned = text
+    # Normalize compatibility forms (e.g. full-width letters) and drop control,
+    # zero-width and bidi-override characters. Letters, digits, punctuation and
+    # symbols in any script are kept ("José", "Zoë", "₹").
+    cleaned = _strip_unsafe_chars(unicodedata.normalize("NFKC", text))
 
-    # Strip XSS/HTML payloads
+    # Strip XSS/HTML payloads, then any remaining markup tags
     for pattern in COMPILED_STRIP:
         cleaned = pattern.sub("", cleaned)
-
-    # Strip null bytes
-    cleaned = cleaned.replace("\x00", "")
-
-    # Normalize unicode to prevent homoglyph attacks
-    # (e.g., Cyrillic "а" looks like Latin "a")
-    cleaned = cleaned.encode("ascii", errors="ignore").decode("ascii")
+    cleaned = _MARKUP_TAG.sub("", cleaned)
 
     return cleaned.strip()
 
@@ -153,15 +186,37 @@ def sanitize_writing_samples(samples: str) -> str:
     if not samples:
         return ""
 
+    return _screen_free_text(samples, "writing sample")[:2000]
+
+
+def sanitize_context_field(text: str, max_length: int = 500) -> str:
+    """Sanitize a free-text context field (constraints, financial context, values).
+
+    These fields are interpolated into the debate system prompts, so they get
+    the same screening as writing samples: markup removed, known injection
+    patterns stripped, and prompt delimiter tags removed. Stripping (rather
+    than rejecting the request) avoids blocking ordinary sentences such as
+    "I act as a caregiver for my mom".
+    """
+    if not text:
+        return ""
+
+    return _screen_free_text(text, "context field")[:max_length]
+
+
+def _screen_free_text(text: str, label: str) -> str:
     # Sanitize XSS/HTML
-    cleaned = sanitize_user_input(samples)
+    cleaned = sanitize_user_input(text)
 
     # Strip injection patterns directly from the text
     injection_found = False
     for pattern in COMPILED_PATTERNS:
+        if not pattern.search(cleaned) and pattern.search(cleaned.translate(_CONFUSABLES)):
+            # A look-alike spelling: fold it so the pattern can be removed.
+            cleaned = cleaned.translate(_CONFUSABLES)
         match = pattern.search(cleaned)
         if match:
-            logger.warning(f"Stripping injection pattern from writing sample: '{match.group()}'")
+            logger.warning(f"Stripping injection pattern from {label}: '{match.group()}'")
             cleaned = pattern.sub("", cleaned)
             injection_found = True
 
@@ -176,8 +231,7 @@ def sanitize_writing_samples(samples: str) -> str:
     cleaned = re.sub(r"</?\w+_samples>", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"</?\w+_instruction\w*>", "", cleaned, flags=re.IGNORECASE)
 
-    # Enforce length limit
-    return cleaned[:2000]
+    return cleaned
 
 
 def validate_agent_output(output: str) -> str:

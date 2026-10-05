@@ -1,7 +1,7 @@
 """Regression tests for prompt-builder fixes from the 'Fix debate quality bugs' plan.
 
 Locks down:
-- Tier 2.2: _build_prompt injects a 'NUMERIC ANCHORS YOU MUST REFERENCE' block when
+- Tier 2.2: _build_prompt injects a restrained numeric-anchor block when
   financial_context contains $-amounts, and omits it otherwise.
 - Tier 2.3.D: build_verdict_prompt surfaces `_interjections` in the prompt body with the
   'do not tell them to reach out' consistency rule.
@@ -53,7 +53,7 @@ def test_build_prompt_injects_numeric_anchors():
     assert "NUMERIC ANCHORS" in prompt, "Expected anchor block to be injected."
     assert "$85K" in prompt
     assert "$2,400/mo" in prompt
-    assert "Weave one exact figure in" in prompt
+    assert "Use at most one exact figure" in prompt
 
 
 def test_build_prompt_no_anchor_block_when_no_dollars():
@@ -87,7 +87,7 @@ def test_build_prompt_caps_anchors_at_four():
 
     assert "NUMERIC ANCHORS" in prompt
     # Only the first four should appear in the anchor block.
-    assert "$50K" not in prompt.split("NUMERIC ANCHORS")[1].split("Weave")[0]
+    assert "$50K" not in prompt.split("NUMERIC ANCHORS")[1].split("Use at most")[0]
 
 
 # ── Tier 2.3.D: verdict interjection surfacing ─────────────────────
@@ -142,7 +142,7 @@ def test_build_prompt_injects_background_research_when_blurb_present():
 
     assert "BACKGROUND RESEARCH" in prompt
     assert "67% of career changers" in prompt
-    assert "MUST weave EXACTLY ONE specific statistic or factual finding" in prompt
+    assert "Use at most ONE specific statistic or factual finding" in prompt
     assert "do NOT name the source" in prompt.lower() or "do NOT name the source" in prompt
 
 
@@ -159,7 +159,7 @@ def test_build_prompt_truncates_long_research_blurb():
     ctx = _base_ctx(_research_blurb=long_blurb)
     prompt = _build_prompt(ctx, _round_info(), "path_a", PERSONA_DEFENDER)
 
-    research_section = prompt.split("BACKGROUND RESEARCH")[1].split("You MUST weave EXACTLY ONE")[0]
+    research_section = prompt.split("BACKGROUND RESEARCH")[1].split("Use at most ONE")[0]
     assert len(research_section) < 1300
 
 

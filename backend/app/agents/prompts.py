@@ -191,12 +191,17 @@ def detect_decision_category(
     'relationship', 'health', or 'general'.
     Order matters: startup before career (subset), education before financial (overlap).
     """
+    template_category = None
     if template_id:
         from app.data.template_catalog import get_template_by_id
 
         template = get_template_by_id(template_id)
         if template:
-            return template.category
+            template_category = template.category
+            path_a_matches = re.sub(r"\s+", " ", path_a).strip().lower() == template.path_a.lower()
+            path_b_matches = re.sub(r"\s+", " ", path_b).strip().lower() == template.path_b.lower()
+            if path_a_matches and path_b_matches:
+                return template.category
 
     combined = " ".join(
         part for part in (path_a, path_b, constraints or "", writing_samples or "") if part
@@ -220,7 +225,7 @@ def detect_decision_category(
         if phrase in combined:
             return "relationship"
 
-    return "general"
+    return template_category or "general"
 
 
 def detect_brave_path(path_a: str, path_b: str) -> str:
@@ -337,8 +342,8 @@ CATEGORY_LAWS: dict[str, str] = {
     "startup": (
         "=== THE LAWS OF THIS REALITY (STARTUPS & RISK) ===\n"
         "Fear is a highly rational survival instinct here. 90% of startups fail. "
-        "If you chose the startup, do not sound like a motivational speaker; sound like a war veteran who survived the 2 AM panic and financial terror. "
-        "If you chose the safe job, do not sound like a coward; sound like a pragmatic killer who wields stability, compound interest, and weekends as a weapon. "
+        "If you chose the startup, do not sound like a motivational speaker; sound like someone who has actually lived the 2 AM financial pressure. "
+        "If you chose the safe job, do not sound like a coward; sound like someone who uses stability, compound interest, and weekends deliberately. "
         "Name the tradeoff plainly. Do not belittle the other path."
     ),
     "career": (
@@ -355,7 +360,7 @@ CATEGORY_LAWS: dict[str, str] = {
     ),
     "relationship": (
         "=== THE LAWS OF THIS REALITY (RELATIONSHIPS) ===\n"
-        "Emotional safety is an illusion that leads to compounding regret. If you took the risk (vulnerability, asking them out, breaking up), do not pretend it didn't hurt, but defend it as the only way to live a real life. "
+        "Emotional safety can become compounding regret. If you took the risk (vulnerability, asking them out, breaking up), do not pretend it didn't hurt, but defend it as the only way to live a real life. "
         "If you avoided the risk, DO NOT APOLOGIZE for silence. Defend it fiercely as 'protecting your peace' and emotional autonomy. "
         "CRITICAL FOR AVOIDANCE PATH: NEVER express regret. NEVER say you feel hollow, lonely, or sad. NEVER admit the other side is right. Name the tradeoff plainly without contempt."
     ),
@@ -396,9 +401,9 @@ def _build_prompt(user_context: dict, round_info: dict, path_key: str, persona: 
     anchor_rule = ""
     if anchors:
         anchor_rule = (
-            f"\nNUMERIC ANCHORS YOU MUST REFERENCE AT LEAST ONE OF: "
+            f"\nNUMERIC ANCHORS YOU MAY REFERENCE: "
             f"{', '.join(anchors[:4])}\n"
-            f"Weave one exact figure in so the tradeoff stops being abstract.\n"
+            f"Use at most one exact figure if it would sound natural in a late-night voice memo.\n"
         )
 
     research_blurb = user_context.get("_research_blurb") or ""
@@ -408,7 +413,7 @@ def _build_prompt(user_context: dict, round_info: dict, path_key: str, persona: 
         research_rule = (
             "\nBACKGROUND RESEARCH (paraphrase, do NOT name the source):\n"
             f"{truncated}\n"
-            "You MUST weave EXACTLY ONE specific statistic or factual finding from this into your response. "
+            "Use at most ONE specific statistic or factual finding from this, and only if it makes the moment sharper. "
             "Paraphrase it. Do NOT list multiple stats. Do NOT name the source.\n"
         )
 
@@ -507,14 +512,14 @@ SAFETY:
 - You can discuss emotional difficulty, financial hardship, and regret honestly - that is your job.
 - If the decision topic feels like it involves someone in crisis, focus on practical consequences, not emotional extremes.
 
-DOMAIN CONTEXT (use these facts to ground your arguments):
+DOMAIN CONTEXT (use at most one relevant fact when it would sound human; never turn the round into a stats recap):
 {domain_context}
 
 BEFORE WRITING (think silently, never output this):
 1. What is the ONE moment from {timeline} on "{path}" with the most emotional weight?
 2. What quiet cost of "{other_path}" is being minimized or denied?
 3. What truth would hit hardest if I said it plainly, without performance?
-4. Write: open in the moment, make the body feel it, then name the cost.
+4. Write: open in the moment, let one concrete detail carry the feeling, then name the cost.
 {anchor_rule}{research_rule}{financial_rule}
 USER CONTEXT:
 - Decision: "{path}" vs "{other_path}"

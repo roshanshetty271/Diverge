@@ -173,6 +173,19 @@ def _iter_stream_events_for_text(
         yield payload
 
 
+def _round_deadline() -> float:
+    """Monotonic time by which the current round must stop starting new work."""
+    return time.monotonic() + get_settings().round_deadline_seconds
+
+
+def _has_time_for_attempt(deadline: float | None, extra_wait: float = 0.0) -> bool:
+    """True if a new generation (after waiting `extra_wait`) can still finish before the deadline."""
+    if deadline is None:
+        return True
+    remaining = deadline - time.monotonic() - extra_wait
+    return remaining >= get_settings().min_attempt_seconds
+
+
 def _generate_with_guardrails(
     *,
     user_ctx: dict,
@@ -184,8 +197,13 @@ def _generate_with_guardrails(
     generator: Callable[[str], str],
     path_a: str | None = None,
     path_b: str | None = None,
+    deadline: float | None = None,
 ) -> str:
-    """Run generation with validation, corrective rewrite, and strict fallback."""
+    """Run generation with validation, corrective rewrite, and strict fallback.
+
+    No generation or rewrite is started once the round deadline is too close;
+    the fallback text is returned instead.
+    """
     prior_texts = _validated_transcript_texts(transcript)
     if extra_prior_texts:
         prior_texts.extend(extra_prior_texts)
@@ -193,6 +211,12 @@ def _generate_with_guardrails(
     debate_id = user_ctx.get("debate_id")
 
     for attempt in range(3):
+        if not _has_time_for_attempt(deadline):
+            logger.warning(
+                "Round deadline reached before attempt %s for stage=%s debate_id=%s",
+                attempt + 1, stage_label, debate_id,
+            )
+            break
         text = generator(rewrite_instruction).strip()
         if not text:
             rewrite_instruction = strict_grounding_rewrite_brief()
@@ -239,23 +263,87 @@ def _generate_with_guardrails(
     return fallback_text
 
 
-_CATEGORY_FALLBACK_FLAVOR: dict[str, tuple[str, str]] = {
-    "career": ("professional routine", "career path"),
-    "startup": ("founder reality", "entrepreneurial bet"),
-    "relationship": ("emotional landscape", "relationship dynamic"),
-    "health": ("daily habits", "lifestyle shift"),
-    "education": ("learning commitment", "educational investment"),
-    "financial": ("financial rhythm", "money decision"),
+_CATEGORY_FALLBACK_OPENERS: dict[str, str] = {
+    "career": "The message sits unsent for a minute longer than it should, because I know what answering it costs now.",
+    "startup": "The numbers are open again, and the part that hurts is how ordinary the fear feels.",
+    "relationship": "The phone is face down, and the unsaid thing still changes the room.",
+    "health": "The smallest choice is the one I notice first, because it tells me what this path has been doing to me.",
+    "education": "The calendar is crowded, and I can feel the years I traded for a different door.",
+    "financial": "The account balance makes this feel less like a theory and more like a weather report.",
+}
+
+_CATEGORY_FALLBACK_STAKES: dict[str, str] = {
+    "career": "The work has changed my leverage, but it has also changed what I am willing to tolerate.",
+    "startup": "The pressure is not a pitch anymore; it shows up in the small decisions I cannot dodge.",
+    "relationship": "The relief and ache arrive together, which is how I know the choice was never simple.",
+    "health": "Progress is quieter than I expected, and so is the cost when I stop choosing it.",
+    "education": "The investment is not abstract anymore; it keeps asking whether access was worth the delay.",
+    "financial": "The math is not dramatic; it is just there every time I decide what can wait.",
 }
 
 
-def _build_round_fallback_text(path: str, timeline: str, category: str = "") -> str:
-    flavor = _CATEGORY_FALLBACK_FLAVOR.get(category, ("daily reality", "life choice"))
+def _compact_path_label(path: str) -> str:
+    """Keep fallback path references readable without inventing new detail."""
+    words = path.strip().lower().split()
+    if len(words) <= 14:
+        return " ".join(words)
+    return " ".join(words[:14]).rstrip(",.;:") + "..."
+
+
+def _build_round_fallback_text(
+    path: str,
+    timeline: str,
+    category: str = "",
+    *,
+    user_ctx: dict | None = None,
+    other_path: str | None = None,
+    interjection: str | None = None,
+) -> str:
+    """Create a human fallback that keeps the future-self illusion intact.
+
+    This only appears after guardrail exhaustion, so it has to be safe and
+    grounded without sounding like an error template.
+    """
+    category_key = (category or "").lower()
+    opener = _CATEGORY_FALLBACK_OPENERS.get(
+        category_key,
+        "The quiet part is that this stopped feeling like a decision and started feeling like a life.",
+    )
+    stakes = _CATEGORY_FALLBACK_STAKES.get(
+        category_key,
+        "The people affected by it do not disappear just because I can explain my reasons.",
+    )
+
+    name = (user_ctx or {}).get("user_name") if user_ctx else ""
+    name_prefix = f"{name}, " if name else ""
+    if name_prefix and opener:
+        opener = opener[0].lower() + opener[1:]
+    path_label = _compact_path_label(path)
+    other_label = _compact_path_label(other_path or "")
+
+    time_clause = (
+        "after all this time"
+        if "looking back" in timeline.lower()
+        else f"at {timeline}"
+    )
+    interjection_line = (
+        "The new detail raises the pressure, but not the deeper tradeoff. "
+        if interjection
+        else ""
+    )
+    other_line = (
+        f"The other life - {other_label} - would hurt differently: less of this, more of what I was trying not to name."
+        if other_label
+        else "The other life still has a pull, mostly because it would have spared me from a different kind of doubt."
+    )
+
     return (
-        f"Right now, living with {path.lower()} in {timeline} shows up in your {flavor[0]}. "
-        f"This path gives something real, but it asks something real back.\n\n"
-        f"The tradeoff behind this {flavor[1]} surfaces in pressure, relief, and responsibility. "
-        "Nothing here is clean. It is simply the version of life you would have to keep waking up inside."
+        f"{name_prefix}{opener} "
+        f"Choosing {path_label} has protected one part of me and worn down another. "
+        f"{interjection_line}{stakes} "
+        f"{other_line} "
+        f"What I know {time_clause}: this is not the clean answer. "
+        "It is the cost I can actually look in the eye."
     )
 
 
@@ -350,7 +438,7 @@ def _make_model(
     if s.model_provider == "openai":
         from strands.models.openai import OpenAIModel
         return OpenAIModel(
-            client_args={"api_key": s.openai_api_key},
+            client_args=s.openai_client_args(),
             model_id=s.debate_model_id,
             params={"max_tokens": tokens, "temperature": temp},
         )
@@ -562,8 +650,8 @@ def _build_runtime_wrapper_prompt(
         "Name the tradeoff or blind spot they are minimizing in that specific moment without mocking them.\n"
         f"2. Then, pivot to YOUR reality right now at {timeline}.\n"
         f'3. CRITICAL TIME RULE: Do NOT use the phrase "I remember" or tell a story in the past tense. '
-        f"You are living this moment RIGHT NOW in {timeline}. Make it visceral. "
-        "What are you looking at? What do you feel in your body?\n"
+        f"You are living this moment RIGHT NOW in {timeline}. Make it concrete through one specific detail. "
+        "Do not default to staring, sitting, standing, racing hearts, or weight-in-the-chest language.\n"
         "4. CRITICAL SETTING RULE: You may not remain in the exact physical setting from a previous round. "
         "Change the environment to prove time has passed.\n"
         "5. CRITICAL DETAIL RULE: Drop trivial old details like clothes or exact rooms from earlier rounds. "
@@ -698,7 +786,7 @@ def _generate_structured_timeline(transcript: list[RoundResult], user_ctx: dict)
             if settings.model_provider == "openai":
                 from openai import OpenAI
 
-                client = OpenAI(api_key=settings.openai_api_key)
+                client = OpenAI(**settings.openai_client_args())
                 completion = client.beta.chat.completions.parse(
                     model=settings.debate_model_id,
                     temperature=0.4,
@@ -756,9 +844,10 @@ def _run_round(
     beta_persona: dict,
     interjection: str | None = None,
 ) -> RoundResult:
-    """Execute one debate round with smart retry logic."""
+    """Execute one debate round with smart retry logic, within the round deadline."""
     alpha_response = ""
     beta_response = ""
+    deadline = _round_deadline()
 
     for attempt in range(MAX_RETRIES):
         try:
@@ -796,7 +885,15 @@ def _run_round(
                 transcript=transcript,
                 content_kind="round",
                 stage_label=f"round_{round_num + 1}.alpha",
-                fallback_text=_build_round_fallback_text(path_a, timeline, user_ctx.get("_category", "")),
+                deadline=deadline,
+                fallback_text=_build_round_fallback_text(
+                    path_a,
+                    timeline,
+                    user_ctx.get("_category", ""),
+                    user_ctx=user_ctx,
+                    other_path=path_b,
+                    interjection=interjection,
+                ),
                 generator=lambda rewrite_instruction: validate_safe_content(
                     validate_agent_output(
                         _safe_agent_output(
@@ -834,7 +931,15 @@ def _run_round(
                 extra_prior_texts=[alpha_response],
                 content_kind="round",
                 stage_label=f"round_{round_num + 1}.beta",
-                fallback_text=_build_round_fallback_text(path_b, timeline, user_ctx.get("_category", "")),
+                deadline=deadline,
+                fallback_text=_build_round_fallback_text(
+                    path_b,
+                    timeline,
+                    user_ctx.get("_category", ""),
+                    user_ctx=user_ctx,
+                    other_path=path_a,
+                    interjection=interjection,
+                ),
                 generator=lambda rewrite_instruction: validate_safe_content(
                     validate_agent_output(
                         _safe_agent_output(
@@ -879,6 +984,9 @@ def _run_round(
 
             if attempt < MAX_RETRIES - 1:
                 delay = _backoff_with_jitter(attempt)
+                if not _has_time_for_attempt(deadline, delay):
+                    logger.warning(f"Round {round_num + 1}: no time left for a retry before the deadline")
+                    break
                 logger.info(f"Retrying round {round_num + 1} in {delay:.1f}s...")
                 time.sleep(delay)
 
@@ -987,7 +1095,7 @@ def run_debate(user_context: dict) -> DebateResponse:
     tools = TOOL_MAP.get(category, [research_insight])
 
     logger.info(
-        f"Starting debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
+        f"Starting debate {debate_id} "
         f"(category={category}, alpha={alpha_persona['label']}, beta={beta_persona['label']})"
     )
     start_time = time.time()
@@ -1073,10 +1181,7 @@ def run_debate_streaming(user_context: dict):
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
 
-    logger.info(
-        f"Starting streaming debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
-        f"(category={category})"
-    )
+    logger.info(f"Starting streaming debate {debate_id} (category={category})")
     start_time = time.time()
 
     for i, round_info in enumerate(rounds):
@@ -1139,6 +1244,7 @@ def _run_round_split(
     behavioral difference is that alpha no longer waits for beta before being
     returned to the caller.
     """
+    deadline = _round_deadline()
     chronology_guardrail = _build_chronology_guardrail(user_ctx, round_info, round_num)
     alpha_system_prompt = _build_round_system_prompt(
         build_alpha_prompt(user_ctx, round_info, alpha_persona),
@@ -1177,7 +1283,15 @@ def _run_round_split(
                 transcript=transcript,
                 content_kind="round",
                 stage_label=f"round_{round_num + 1}.alpha",
-                fallback_text=_build_round_fallback_text(path_a, timeline, user_ctx.get("_category", "")),
+                deadline=deadline,
+                fallback_text=_build_round_fallback_text(
+                    path_a,
+                    timeline,
+                    user_ctx.get("_category", ""),
+                    user_ctx=user_ctx,
+                    other_path=path_b,
+                    interjection=interjection,
+                ),
                 generator=lambda rewrite_instruction: validate_safe_content(
                     validate_agent_output(
                         _safe_agent_output(
@@ -1200,6 +1314,9 @@ def _run_round_split(
                 break
             if attempt < MAX_RETRIES - 1:
                 delay = _backoff_with_jitter(attempt)
+                if not _has_time_for_attempt(deadline, delay):
+                    logger.warning(f"Round {round_num + 1} alpha: no time left for a retry before the deadline")
+                    break
                 logger.info(f"Retrying round {round_num + 1} alpha in {delay:.1f}s...")
                 time.sleep(delay)
 
@@ -1235,7 +1352,15 @@ def _run_round_split(
                     extra_prior_texts=[alpha_response],
                     content_kind="round",
                     stage_label=f"round_{round_num + 1}.beta",
-                    fallback_text=_build_round_fallback_text(path_b, timeline, user_ctx.get("_category", "")),
+                    deadline=deadline,
+                    fallback_text=_build_round_fallback_text(
+                        path_b,
+                        timeline,
+                        user_ctx.get("_category", ""),
+                        user_ctx=user_ctx,
+                        other_path=path_a,
+                        interjection=interjection,
+                    ),
                     generator=lambda rewrite_instruction: validate_safe_content(
                         validate_agent_output(
                             _safe_agent_output(
@@ -1258,6 +1383,9 @@ def _run_round_split(
                     break
                 if attempt < MAX_RETRIES - 1:
                     delay = _backoff_with_jitter(attempt)
+                    if not _has_time_for_attempt(deadline, delay):
+                        logger.warning(f"Round {round_num + 1} beta: no time left for a retry before the deadline")
+                        break
                     logger.info(f"Retrying round {round_num + 1} beta in {delay:.1f}s...")
                     time.sleep(delay)
 
@@ -1404,10 +1532,7 @@ def run_debate_token_streaming(user_context: dict):
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
 
-    logger.info(
-        f"Starting token-streaming debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
-        f"(category={category})"
-    )
+    logger.info(f"Starting token-streaming debate {debate_id} (category={category})")
     start_time = time.time()
 
     yield {

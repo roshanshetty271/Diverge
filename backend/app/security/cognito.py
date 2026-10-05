@@ -87,6 +87,41 @@ def _decode_jwt_header(token: str) -> dict:
     return json.loads(_b64_decode(parts[0]))
 
 
+_missing_client_id_warned = False
+
+
+def _validate_token_claims(claims: dict, settings) -> None:
+    """Check token_use and that the token was issued to this app's client.
+
+    ID tokens carry the app client id in `aud`; access tokens carry it in
+    `client_id`. Any other token_use is rejected. If the client id is not
+    configured, only the client check is skipped (with a warning), so a backend
+    deployed without DIVERGE_COGNITO_CLIENT_ID does not lock everyone out.
+    """
+    global _missing_client_id_warned
+
+    token_use = claims.get("token_use")
+    if token_use not in ("access", "id"):
+        raise HTTPException(status_code=401, detail="Invalid token type")
+
+    expected_client_id = settings.cognito_client_id
+    if not expected_client_id:
+        if not _missing_client_id_warned:
+            logger.warning(
+                "DIVERGE_COGNITO_CLIENT_ID is not set; skipping the token audience/client check"
+            )
+            _missing_client_id_warned = True
+        return
+
+    if token_use == "id":
+        audience = claims.get("aud")
+        audiences = audience if isinstance(audience, list) else [audience]
+        if expected_client_id not in audiences:
+            raise HTTPException(status_code=401, detail="Invalid token audience")
+    elif claims.get("client_id") != expected_client_id:
+        raise HTTPException(status_code=401, detail="Invalid token client")
+
+
 def _verify_jwt_signature(token: str) -> dict:
     """Verify JWT signature using Cognito JWKS and validate claims.
 
@@ -94,7 +129,7 @@ def _verify_jwt_signature(token: str) -> dict:
     1. Fetch JWKS from Cognito (cached, with stale-fallback)
     2. Match key by 'kid' header
     3. Verify RS256 signature using python-jose if available, else fall back to claim validation
-    4. Validate issuer, token_use, and expiration claims
+    4. Validate issuer, expiration, token_use, and the app client (aud / client_id)
     """
     settings = get_settings()
 
@@ -130,18 +165,20 @@ def _verify_jwt_signature(token: str) -> dict:
         if not matching_key:
             raise ValueError(f"No matching JWKS key for kid={kid}")
 
-        # Full cryptographic verification
+        # Full cryptographic verification. The audience is checked per token
+        # type in _validate_token_claims (access tokens carry client_id, not aud).
         verified = jose_jwt.decode(
             token,
             matching_key,
             algorithms=["RS256"],
             issuer=expected_issuer,
             options={
-                "verify_aud": False,  # Cognito access tokens don't have aud
+                "verify_aud": False,
                 "verify_at_hash": False,
             },
         )
         logger.debug("JWT signature verified cryptographically")
+        _validate_token_claims(verified, settings)
         return verified
 
     except ImportError:
@@ -157,12 +194,10 @@ def _verify_jwt_signature(token: str) -> dict:
     if payload.get("iss") != expected_issuer:
         raise HTTPException(status_code=401, detail="Invalid token issuer")
 
-    if payload.get("token_use") not in ("access", "id"):
-        raise HTTPException(status_code=401, detail="Invalid token type")
-
     if payload.get("exp", 0) < time.time():
         raise HTTPException(status_code=401, detail="Token expired")
 
+    _validate_token_claims(payload, settings)
     return payload
 
 
@@ -195,3 +230,11 @@ def require_auth(
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required. Please sign in.")
     return user
+
+
+def ensure_debate_access(owner_id: str | None, user: Optional[dict]) -> None:
+    """Anonymous debates are open to anyone holding the id; signed-in ones only to their owner."""
+    if owner_id in (None, "anonymous"):
+        return
+    if not user or user.get("sub") != owner_id:
+        raise HTTPException(status_code=403, detail="You don't have access to this debate session.")

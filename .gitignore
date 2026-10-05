@@ -54,3 +54,8 @@ backend/test_output/
 
 # Logs
 *.log
+
+# Frontend test and build leftovers
+frontend/test-results/
+frontend/tmp-ui-check.spec.mjs
+*.tsbuildinfo
