@@ -1065,7 +1065,7 @@ def run_debate(user_context: dict) -> DebateResponse:
     tools = TOOL_MAP.get(category, [research_insight])
 
     logger.info(
-        f"Starting debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
+        f"Starting debate {debate_id} "
         f"(category={category}, alpha={alpha_persona['label']}, beta={beta_persona['label']})"
     )
     start_time = time.time()
@@ -1151,10 +1151,7 @@ def run_debate_streaming(user_context: dict):
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
 
-    logger.info(
-        f"Starting streaming debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
-        f"(category={category})"
-    )
+    logger.info(f"Starting streaming debate {debate_id} (category={category})")
     start_time = time.time()
 
     for i, round_info in enumerate(rounds):
@@ -1496,10 +1493,7 @@ def run_debate_token_streaming(user_context: dict):
     rounds = get_rounds(category)
     tools = TOOL_MAP.get(category, [research_insight])
 
-    logger.info(
-        f"Starting token-streaming debate {debate_id}: {user_context['path_a']} vs {user_context['path_b']} "
-        f"(category={category})"
-    )
+    logger.info(f"Starting token-streaming debate {debate_id} (category={category})")
     start_time = time.time()
 
     yield {
