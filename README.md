@@ -17,57 +17,57 @@ Team Sic Mundus | AWS 10,000 AIdeas Competition | Daily Life Enhancement
 
 ## What Makes It Different
 
-**Token-by-token streaming.** Watch agents type their arguments in real time via SSE. Not blocks of text appearing at once — actual live thought generation.
+**Streamed rounds.** Each round is sent to the browser as server-sent events and revealed with a typewriter effect. A round's text is generated and checked by the content guardrails first, then sent in chunks.
 
-**User interjection.** Between rounds, redirect the debate: "But what about the kids?" Both agents factor your input into their next argument.
+**User interjection.** The debate pauses after each round. Add context before continuing ("But what about the kids?") and both future selves factor it into the next round.
 
 **Adaptive rounds.** Financial decisions get salary and savings analysis. Relationship decisions get emotional cost and reward. The debate adapts to you.
 
 **Voice matching.** Paste some texts or emails. The agents argue in your voice, not generic assistant speak.
 
-**Monte Carlo grounding.** Financial simulations and probability models back up the arguments with real numbers.
+**Monte Carlo grounding.** When you give financial details, a Monte Carlo runway simulation runs before the debate and its numbers are added to the debate prompts.
 
-**Animated fork visualization.** An SVG showing two diverging life paths with milestone nodes at Year 1, 3, 5, 10, and Deathbed. Click milestones to see snapshots.
+**Fork timeline.** The verdict page shows two diverging life paths with milestones at Year 1, 3, 5, 10 and Final Words. Click a milestone to read that snapshot.
 
-**Sentiment analysis (scaffolded).** When Amazon Comprehend is available, emotional tone shifts per round are tracked for each path. On the current deployment this tab is hidden until Comprehend access is restored.
+**Sentiment analysis.** Amazon Comprehend scores the emotional tone of each path's argument every round, shown in the Sentiment chart.
 
-**Shareable links.** Share any debate as a read-only URL. Judges, friends, or your therapist can see the full debate.
+**Shareable links.** Share any debate as a read-only URL with the rounds and the verdict. Your finances, writing samples, name and age are not included.
 
 **Voice input.** Speak your decision options via browser speech recognition.
 
 **PDF export.** Download a branded dark-themed decision report with full transcript, verdict, and resources.
 
-**Decision journal.** Every debate is logged. Record which path you chose. Reflect with satisfaction ratings over time.
+**Decision journal.** Finished debates are saved to your journal (in your account when signed in, otherwise in the browser). Record which path you chose and reflect with satisfaction ratings over time.
 
 ## The Stack
 
-Diverge was designed around a full AWS stack but currently runs in a leaner configuration while Bedrock model access, Comprehend, AgentCore Memory, and CloudFront are pending. All AWS integrations are scaffolded and will re-activate when account access is restored.
+Diverge runs on Amazon Bedrock with Comprehend sentiment enabled. A few AWS integrations are scaffolded in the code but switched off in the current deployment, listed in the right-hand column.
 
 | Layer | Live today | Scaffolded / pending access |
 |-------|------------|-----------------------------|
 | Frontend | React 18, Vite, Tailwind CSS 4, Framer Motion, Recharts — hosted on Vercel | CloudFront + S3 origin-access wiring |
 | Backend | FastAPI, Strands Agents SDK, Pydantic v2 — served via AWS Lambda + API Gateway | |
-| AI models | OpenAI `gpt-4o-mini` (debate rounds, verdict, timeline) | Amazon Bedrock Nova Pro / Nova Lite |
-| RAG | Pre-curated resource library | Bedrock Knowledge Bases (S3 data source) |
+| AI models | Amazon Bedrock: Nova Pro (debate rounds, verdict, timeline), Nova Lite (round metrics) | OpenAI `gpt-4o-mini` via `DIVERGE_MODEL_PROVIDER=openai` (used for local development) |
+| RAG | Pre-curated resource library | Bedrock Knowledge Bases (off: no knowledge base configured) |
 | Safety | Custom Python content guardrails + style validator with rewrite loop | Bedrock Guardrails (provider-side) |
-| Analytics | Monte Carlo financial simulation (Python) | Amazon Comprehend sentiment |
+| Analytics | Monte Carlo financial simulation (Python), Amazon Comprehend sentiment | |
 | Voice | Browser `SpeechRecognition`, Web Speech TTS | Amazon Polly Neural + SSML |
 | Email | Amazon SES (check-ins + results) | |
 | Data | Amazon DynamoDB (debates, users, sessions, shared links, interjections, finalization progress) | |
 | Auth | Amazon Cognito (OIDC, hosted UI) | |
 | Memory | Per-session DynamoDB state with checkpointed resume | AgentCore Memory persistence |
-| Observability | CloudWatch logs + alarms | AWS X-Ray tracing |
+| Observability | CloudWatch logs + alarms, AWS X-Ray tracing | |
 
 ## Local Development
 
-Prerequisites: Python 3.12+, Node.js 18+, an OpenAI API key (default provider). AWS credentials are required only if you are exercising SES, DynamoDB, Cognito, or Bedrock-backed paths.
+Prerequisites: Python 3.12+, Node.js 18+, and an OpenAI API key (the local default provider; production uses Bedrock). AWS credentials are required only if you are exercising SES, DynamoDB, Cognito, or Bedrock-backed paths.
 
 Backend:
 ```bash
 cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+echo "DIVERGE_OPENAI_API_KEY=sk-..." > .env   # settings are read from DIVERGE_* variables
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -88,6 +88,16 @@ npm run dev:aws
 ```
 
 Deployed browsers should also stay same-origin. Vercel rewrites `/api/debate/start`, `/api/debate/session/*`, `/api/debate/stream*`, and `/api/debate/interject` to the long-running AWS Function URL, while the rest of `/api/*` goes to API Gateway. CloudFront should mirror that same path split once it is available.
+
+## Tests
+
+```bash
+pip install -r backend/requirements.txt pytest pytest-asyncio
+python -m pytest backend/tests
+cd frontend && npm ci && npm run build
+```
+
+CI (`.github/workflows/ci.yml`) runs the same backend tests and frontend build on every push to `main` and on pull requests. The tests use fakes and stubs only; they need no AWS access or API keys.
 
 ## Sic Mundus Creatus Est.
 
