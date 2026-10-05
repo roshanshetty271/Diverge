@@ -113,11 +113,8 @@ def start_debate(
     """Start a new 5-round debate.
 
     Public endpoint (no auth required to start a debate), but:
-    - Anonymous: 5 debates/hour per IP+fingerprint (enhanced tracking)
+    - Anonymous: 5 debates/hour per client IP
     - Authenticated: 10 debates/hour per user (can't bypass with VPN)
-    
-    Security: Enhanced fingerprinting combines IP + User-Agent + Accept-Language
-    to make abuse harder while maintaining seamless UX for legitimate users.
     """
     # 0. Origin verification — enabled only when a trusted edge proxy is available
     _verify_origin(request)

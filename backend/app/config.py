@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     # Temporary testing kill switch. Set DIVERGE_RATE_LIMITING_ENABLED=true to restore.
     rate_limiting_enabled: bool = False
     max_debates_per_hour: int = 5
+    # Key for hashing rate-limit subjects (IPs, user ids). Falls back to a constant.
+    rate_limit_hash_key: str = ""
 
     # Origin verification (protects Function URL from direct access)
     origin_verify_header: str = ""

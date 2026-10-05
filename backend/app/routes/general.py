@@ -221,8 +221,7 @@ def reflect_on_debate(debate_id: str, body: ReflectionRequest, request: Request,
 
 @router.get("/health")
 def health_check(request: Request):
-    """Health check with dependency verification."""
-    check_rate_limit(request, max_requests=30, window_seconds=300, endpoint="health")
+    """Health check with dependency verification. Never rate limited."""
     deps: dict[str, str] = {}
     settings = get_settings()
 
