@@ -569,7 +569,23 @@ export default function Verdict() {
     if (sharing || shareUrl) return;
     setSharing(true);
     try {
-      const res = await shareDebate(debate as unknown as Record<string, unknown>, (input || {}) as Record<string, unknown>);
+      // Public links carry only what the shared page renders: no finances,
+      // writing samples, name or age.
+      const publicDebate = {
+        verdict: debate.verdict,
+        transcript: debate.transcript.map((r) => ({
+          round_number: r.round_number,
+          round_name: r.round_name,
+          round_title: r.round_title,
+          alpha: r.alpha,
+          beta: r.beta,
+          status: r.status,
+        })),
+        metrics: debate.metrics,
+        completed_rounds: debate.completed_rounds,
+        total_rounds: debate.total_rounds,
+      };
+      const res = await shareDebate(publicDebate, { path_a: pathAName, path_b: pathBName });
       const fullUrl = `${window.location.origin}${res.url}`;
       setShareUrl(fullUrl);
       await navigator.clipboard.writeText(fullUrl);

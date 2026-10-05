@@ -357,26 +357,61 @@ def update_checkin_record(checkin_id: str, updates: dict) -> dict:
         raise
 
 
+# What the public share page (frontend SharedDebate.tsx) renders. Nothing else
+# from the debate input (finances, writing samples, name, age...) is stored or served.
+_SHARED_ROUND_FIELDS = ("round_number", "round_name", "round_title", "alpha", "beta", "status")
+
+
+def _public_share_view(item: dict) -> dict:
+    """Project a shared debate onto the fields the public page needs.
+
+    Applied when saving new shares and when serving any share, so older items
+    that stored the full input are served without it.
+    """
+    input_data = item.get("input") if isinstance(item.get("input"), dict) else {}
+    transcript = [
+        {field: round_data.get(field) for field in _SHARED_ROUND_FIELDS if field in round_data}
+        for round_data in (item.get("transcript") or [])
+        if isinstance(round_data, dict)
+    ]
+    metrics = [
+        {"path_a": entry.get("path_a"), "path_b": entry.get("path_b")} if isinstance(entry, dict) else None
+        for entry in (item.get("metrics") or [])
+    ]
+    return {
+        "share_id": item.get("share_id"),
+        "path_a": item.get("path_a") or input_data.get("path_a", ""),
+        "path_b": item.get("path_b") or input_data.get("path_b", ""),
+        "verdict": item.get("verdict", ""),
+        "transcript": transcript,
+        "metrics": metrics,
+        "completed_rounds": item.get("completed_rounds", len(transcript)),
+        "total_rounds": item.get("total_rounds", 5),
+        "created_at": item.get("created_at"),
+    }
+
+
 def save_shared_debate(share_id: str, debate_data: dict, user_input: dict) -> dict:
     """Save a debate for public sharing (no auth required to view)."""
     settings = get_settings()
     table = _get_table(settings.debates_table)
 
-    item = {
-        "debate_id": f"shared#{share_id}",
-        "user_id": "public",
+    public = _public_share_view({
         "share_id": share_id,
-        "is_public": True,
         "path_a": user_input.get("path_a", ""),
         "path_b": user_input.get("path_b", ""),
         "verdict": debate_data.get("verdict", ""),
         "transcript": debate_data.get("transcript", []),
         "metrics": debate_data.get("metrics", []),
-        "resources": debate_data.get("resources", []),
         "completed_rounds": debate_data.get("completed_rounds", 0),
         "total_rounds": debate_data.get("total_rounds", 5),
-        "input": user_input,
         "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    item = {
+        **public,
+        "debate_id": f"shared#{share_id}",
+        "user_id": "public",
+        "is_public": True,
         "ttl": int((datetime.now(timezone.utc) + timedelta(days=90)).timestamp()),
     }
 
@@ -390,7 +425,7 @@ def save_shared_debate(share_id: str, debate_data: dict, user_input: dict) -> di
 
 
 def get_shared_debate(share_id: str) -> dict | None:
-    """Retrieve a publicly shared debate."""
+    """Retrieve the public view of a shared debate."""
     settings = get_settings()
     table = _get_table(settings.debates_table)
 
@@ -398,7 +433,7 @@ def get_shared_debate(share_id: str) -> dict | None:
         response = table.get_item(Key={"debate_id": f"shared#{share_id}"})
         item = _from_dynamodb_compatible(response.get("Item"))
         if item and item.get("is_public"):
-            return item
+            return _public_share_view(item)
         return None
     except Exception as e:
         logger.error(f"Failed to get shared debate {share_id}: {e}")
