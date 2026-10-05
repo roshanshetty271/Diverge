@@ -1,8 +1,8 @@
 """Checkpointed debate orchestration that pauses after each round."""
 
 import logging
-import threading
 import uuid
+from datetime import datetime, timezone
 
 from app.agents.prompts import detect_decision_category, get_rounds
 from app.db.dynamodb import (
@@ -176,8 +176,13 @@ def _finalize_checkpointed_session_bundle(
     user_context: dict,
     total_rounds: int,
     interjections_history: list[str] | None = None,
-) -> None:
-    """Finish verdict/timeline/resource generation after the final round without blocking SSE."""
+) -> dict:
+    """Generate verdict/timeline/resources after the final round and mark the session complete.
+
+    Runs inline in the request: Lambda freezes the process once the response is
+    returned, so work left on a background thread would never finish.
+    Returns the stored verdict, timeline, resources and progress.
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     interjections_history = list(interjections_history or [])
@@ -245,6 +250,56 @@ def _finalize_checkpointed_session_bundle(
         },
     )
     _persist_to_agentcore_memory(debate_id, user_context, transcript, verdict)
+    return {
+        "verdict": verdict,
+        "timeline": timeline,
+        "resources": resources,
+        "progress": progress,
+    }
+
+
+# A "finalizing" session untouched for longer than the Lambda timeout (300 s)
+# was abandoned by the request that started it and may be finalized again.
+FINALIZATION_STALE_SECONDS = 360
+
+
+def _is_stale_finalization(session: dict) -> bool:
+    if session.get("status") != "finalizing":
+        return False
+    try:
+        updated_at = datetime.fromisoformat(str(session.get("updated_at")))
+    except ValueError:
+        return False
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+    return age > FINALIZATION_STALE_SECONDS
+
+
+def _resume_stale_finalization(debate_id: str, session: dict) -> CheckpointedDebateResponse:
+    """Finish a session stuck in "finalizing" (claimed with a conditional write)."""
+    try:
+        update_debate_session(
+            debate_id,
+            {"finalization_progress": {"verdict": "running", "timeline": "running", "resources": "running"}},
+            expected_updated_at=session.get("updated_at"),
+        )
+    except SessionConflictError:
+        return _session_to_response(debate_id, _latest_session(debate_id, session))
+
+    logger.warning("Resuming stale finalization for debate_id=%s", debate_id)
+    user_context = dict(session.get("input", {}) or {})
+    _finalize_checkpointed_session_bundle(
+        debate_id,
+        _deserialize_transcript(session.get("transcript", [])),
+        _deserialize_metrics(session.get("metrics", [])),
+        session.get("debate_summary", ""),
+        session.get("prev_beta"),
+        user_context,
+        int(session.get("total_rounds", 5)),
+        list(session.get("interjections", []) or []),
+    )
+    return _session_to_response(debate_id, _latest_session(debate_id, session))
 
 
 def start_checkpointed_debate(user_context: dict, user_id: str = "anonymous") -> CheckpointedDebateResponse:
@@ -336,6 +391,8 @@ def continue_checkpointed_debate(
         return _session_to_response(debate_id, session)
 
     if session.get("status") == "finalizing":
+        if _is_stale_finalization(session):
+            return _resume_stale_finalization(debate_id, session)
         return _session_to_response(debate_id, session)
 
     if _is_duplicate_request(session, round_number):
@@ -391,8 +448,6 @@ def continue_checkpointed_debate(
     completed_rounds = len([r for r in transcript if r.status == "completed"])
 
     if next_round_index >= len(rounds):
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         try:
             update_debate_session(
                 debate_id,
@@ -411,51 +466,20 @@ def continue_checkpointed_debate(
         except SessionConflictError:
             return _session_to_response(debate_id, _latest_session(debate_id, session))
 
-        timeline_active = completed_rounds >= 3
-        progress: dict[str, str] = {
-            "verdict": "running",
-            "timeline": "running" if timeline_active else "skipped",
-            "resources": "running",
-        }
-        update_debate_session(debate_id, {"finalization_progress": dict(progress)})
-
-        results: dict[str, object] = {}
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            verdict_future = pool.submit(_build_partial_verdict, transcript, user_context, len(rounds))
-            resources_future = pool.submit(lambda: _serialize_models(_get_resources(user_context)))
-            future_to_name = {verdict_future: "verdict", resources_future: "resources"}
-            if timeline_active:
-                timeline_future = pool.submit(_generate_structured_timeline, transcript, user_context)
-                future_to_name[timeline_future] = "timeline"
-
-            for fut in as_completed(future_to_name):
-                name = future_to_name[fut]
-                results[name] = fut.result()
-                progress[name] = "done"
-                if len(results) < len(future_to_name):
-                    update_debate_session(debate_id, {"finalization_progress": dict(progress)})
-
-        verdict = results.get("verdict", "")
-        timeline = results.get("timeline") if timeline_active else None
-        resources = results.get("resources", [])
-
-        complete_debate_session(
+        final = _finalize_checkpointed_session_bundle(
             debate_id,
-            {
-                "current_round_index": next_round_index,
-                "transcript": _serialize_models(transcript),
-                "metrics": _serialize_models(metrics),
-                "debate_summary": debate_summary,
-                "prev_beta": prev_beta,
-                "verdict": verdict,
-                "timeline": timeline.model_dump() if timeline else None,
-                "resources": resources,
-                "total_rounds": len(rounds),
-                "interjections": list(interjections_history),
-                "finalization_progress": dict(progress),
-            },
+            transcript,
+            metrics,
+            debate_summary,
+            prev_beta,
+            user_context,
+            len(rounds),
+            list(interjections_history),
         )
-        _persist_to_agentcore_memory(debate_id, user_context, transcript, verdict)
+        verdict = final["verdict"]
+        timeline = final["timeline"]
+        resources = final["resources"]
+        progress = final["progress"]
 
         return CheckpointedDebateResponse(
             status="complete",
@@ -692,21 +716,7 @@ def continue_checkpointed_streaming(
         if round_complete_event:
             yield round_complete_event
 
-        threading.Thread(
-            target=_finalize_checkpointed_session_bundle,
-            args=(
-                debate_id,
-                transcript,
-                metrics,
-                debate_summary,
-                prev_beta,
-                user_context,
-                len(rounds),
-                list(interjections_history),
-            ),
-            daemon=True,
-        ).start()
-
+        # Tell streaming clients the round is saved and the verdict is underway.
         yield {
             "type": "session_update",
             "status": "finalizing",
@@ -715,6 +725,28 @@ def continue_checkpointed_streaming(
             "total_rounds": len(rounds),
             "next_round_number": None,
             "verdict_ready": False,
+        }
+
+        final = _finalize_checkpointed_session_bundle(
+            debate_id,
+            transcript,
+            metrics,
+            debate_summary,
+            prev_beta,
+            user_context,
+            len(rounds),
+            list(interjections_history),
+        )
+        timeline = final["timeline"]
+        yield {
+            "type": "complete",
+            "verdict": final["verdict"],
+            "timeline": timeline.model_dump() if timeline else None,
+            "debate_id": debate_id,
+            "metrics": [m.model_dump() if hasattr(m, "model_dump") else m for m in metrics],
+            "completed_rounds": completed_rounds,
+            "total_rounds": len(rounds),
+            "resources": final["resources"],
         }
     else:
         try:

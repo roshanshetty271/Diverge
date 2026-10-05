@@ -1,6 +1,7 @@
 """Checkpointed continue: duplicate requests must not run or overwrite a round twice."""
 
 import copy
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from botocore.exceptions import ClientError
@@ -28,6 +29,13 @@ class FakeSessionTable:
         if ConditionExpression == "current_round_index = :expected":
             expected = ExpressionAttributeValues[":expected"]
             if not existing or existing.get("current_round_index") != expected:
+                raise ClientError(
+                    {"Error": {"Code": "ConditionalCheckFailedException", "Message": "conflict"}},
+                    "PutItem",
+                )
+        elif ConditionExpression == "updated_at = :expected_updated_at":
+            expected = ExpressionAttributeValues[":expected_updated_at"]
+            if not existing or existing.get("updated_at") != expected:
                 raise ClientError(
                     {"Error": {"Code": "ConditionalCheckFailedException", "Message": "conflict"}},
                     "PutItem",
@@ -195,3 +203,76 @@ def test_streaming_on_completed_session_replays_instead_of_erroring(monkeypatch,
 
     assert [e["type"] for e in events] == ["round_complete", "session_update", "complete"]
     assert events[-1]["verdict"] == "Done."
+
+
+# ── Finalization runs inline (issue: Lambda froze the background thread) ──
+
+
+def test_streaming_final_round_finalizes_before_the_stream_ends(monkeypatch, table):
+    table.items[DEBATE_ID] = _session(4)
+    _install_round(monkeypatch, ["knot"])
+
+    events = list(oc.continue_checkpointed_streaming(DEBATE_ID))
+
+    types = [e["type"] for e in events]
+    assert types[-3:] == ["round_complete", "session_update", "complete"]
+    assert events[-2]["status"] == "finalizing"
+    assert events[-1]["verdict"] == "The verdict."
+    stored = table.items[DEBATE_ID]
+    assert stored["status"] == "complete"
+    assert stored["verdict"] == "The verdict."
+    assert stored["finalization_progress"]["verdict"] == "done"
+
+
+def test_streaming_finalization_failure_still_completes_the_session(monkeypatch, table):
+    table.items[DEBATE_ID] = _session(4)
+    _install_round(monkeypatch, ["knot"])
+
+    def broken_resources(ctx):
+        raise RuntimeError("resource service down")
+
+    monkeypatch.setattr(oc, "_get_resources", broken_resources)
+
+    events = list(oc.continue_checkpointed_streaming(DEBATE_ID))
+
+    assert events[-1]["type"] == "complete"
+    assert table.items[DEBATE_ID]["status"] == "complete"
+    assert table.items[DEBATE_ID]["verdict"]
+
+
+def test_nonstream_final_round_completes_inline(monkeypatch, table):
+    table.items[DEBATE_ID] = _session(4)
+    _install_round(monkeypatch, ["knot"])
+
+    response = oc.continue_checkpointed_debate(DEBATE_ID)
+
+    assert response.status == "complete"
+    assert response.verdict == "The verdict."
+    assert table.items[DEBATE_ID]["status"] == "complete"
+
+
+def _finalizing_session(age_seconds: int) -> dict:
+    session = _session(5, status="finalizing")
+    session["updated_at"] = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).isoformat()
+    return session
+
+
+def test_stale_finalizing_session_is_finished_on_continue(monkeypatch, table):
+    table.items[DEBATE_ID] = _finalizing_session(age_seconds=900)
+    _install_round(monkeypatch, ["should not run"])
+
+    response = oc.continue_checkpointed_debate(DEBATE_ID)
+
+    assert response.status == "complete"
+    assert response.verdict == "The verdict."
+    assert table.items[DEBATE_ID]["status"] == "complete"
+
+
+def test_recent_finalizing_session_is_left_alone(monkeypatch, table):
+    table.items[DEBATE_ID] = _finalizing_session(age_seconds=30)
+    _install_round(monkeypatch, ["should not run"])
+
+    response = oc.continue_checkpointed_debate(DEBATE_ID)
+
+    assert response.status == "finalizing"
+    assert table.puts == 0

@@ -218,12 +218,14 @@ def update_debate_session(
     debate_id: str,
     session_data: dict,
     expected_round_index: int | None = None,
+    expected_updated_at: str | None = None,
 ) -> dict:
     """Update a checkpointed debate session item.
 
     With `expected_round_index`, the write only succeeds if the stored
     `current_round_index` still equals it; otherwise SessionConflictError is
     raised so a duplicate request cannot overwrite a round that already landed.
+    `expected_updated_at` works the same way on the `updated_at` timestamp.
     """
     settings = get_settings()
     table = _get_table(settings.debates_table)
@@ -245,11 +247,14 @@ def update_debate_session(
         if expected_round_index is not None:
             put_kwargs["ConditionExpression"] = "current_round_index = :expected"
             put_kwargs["ExpressionAttributeValues"] = {":expected": expected_round_index}
+        elif expected_updated_at is not None:
+            put_kwargs["ConditionExpression"] = "updated_at = :expected_updated_at"
+            put_kwargs["ExpressionAttributeValues"] = {":expected_updated_at": expected_updated_at}
         table.put_item(**put_kwargs)
         return item
     except Exception as e:
         if _is_conditional_failure(e):
-            logger.info("Session %s already advanced past round index %s", debate_id, expected_round_index)
+            logger.info("Conditional update lost for session %s", debate_id)
             raise SessionConflictError(debate_id) from e
         logger.error(f"Failed to update session {debate_id}: {e}")
         raise

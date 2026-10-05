@@ -6,6 +6,7 @@ import ForkTimeline from "../components/ForkTimeline";
 import { useDivergeAuth } from "../hooks/useAuth";
 import { useToast } from "../components/Toast";
 import {
+  continueCheckpointedDebate,
   emailResults,
   getCheckpointedDebateSession,
   getCapabilities,
@@ -188,6 +189,10 @@ function extractNamedSections(verdictText: string, headerRegex: RegExp): { headi
   });
 }
 
+// Stop polling for a pending verdict after this long and offer a retry instead.
+const FINALIZATION_POLL_LIMIT_MS = 150_000;
+const FINALIZATION_POLL_INTERVAL_MS = 1500;
+
 function checkpointedToDebateResponse(result: CheckpointedDebateResponse): DebateResponse {
   return {
     debate_id: result.debate_id,
@@ -238,6 +243,9 @@ export default function Verdict() {
   const [gutFear, setGutFear] = useState(initialGutCheck?.fear ?? "");
   const [gutSubmitted, setGutSubmitted] = useState(initialGutCheck?.submitted ?? shouldSkipGutCheck);
   const [finalizationProgress, setFinalizationProgress] = useState<FinalizationProgress | null>(null);
+  const [finalizationTimedOut, setFinalizationTimedOut] = useState(false);
+  const [retryingFinalization, setRetryingFinalization] = useState(false);
+  const [pollAttempt, setPollAttempt] = useState(0);
 
   useEffect(() => {
     if (!debate || !input || authLoading || !debate.verdict) return;
@@ -313,6 +321,8 @@ export default function Verdict() {
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const startedAt = Date.now();
+    setFinalizationTimedOut(false);
 
     const pollSession = async () => {
       try {
@@ -335,11 +345,14 @@ export default function Verdict() {
         // Keep polling quietly while the verdict bundle finishes in the background.
       }
 
-      if (!cancelled) {
-        timer = setTimeout(() => {
-          void pollSession();
-        }, 1500);
+      if (cancelled) return;
+      if (Date.now() - startedAt >= FINALIZATION_POLL_LIMIT_MS) {
+        setFinalizationTimedOut(true);
+        return;
       }
+      timer = setTimeout(() => {
+        void pollSession();
+      }, FINALIZATION_POLL_INTERVAL_MS);
     };
 
     void pollSession();
@@ -348,7 +361,7 @@ export default function Verdict() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [debate?.debate_id, debate?.verdict, input]);
+  }, [debate?.debate_id, debate?.verdict, input, pollAttempt]);
 
   useEffect(() => {
     if (!debate?.debate_id) return;
@@ -477,6 +490,27 @@ export default function Verdict() {
       : mapStructuredTimelineRows(structuredTimeline, "path_b_bet");
   const hasTimeline = snapshotA.length >= 3 || snapshotB.length >= 3;
   const hasStructuredData = winsA.length > 0 || winsB.length > 0 || blindSpot.length > 20;
+
+  const handleRetryFinalization = async () => {
+    if (retryingFinalization) return;
+    setRetryingFinalization(true);
+    try {
+      // Newer backends finish a stalled verdict here; older ones return the current state.
+      const session = await continueCheckpointedDebate(debate.debate_id, undefined, debate.total_rounds);
+      if (session.verdict) {
+        const updatedDebate = checkpointedToDebateResponse(session);
+        setDebate(updatedDebate);
+        if (input) {
+          storeDebateState(updatedDebate, input);
+        }
+      }
+    } catch {
+      // Fall back to polling below.
+    } finally {
+      setRetryingFinalization(false);
+      setPollAttempt((n) => n + 1);
+    }
+  };
 
   const handleCheckin = async () => {
     if (!checkinEmail || checkinSending) return;
@@ -639,6 +673,29 @@ export default function Verdict() {
             This helps you notice if the AI confirmed what you already believed<br />
             vs. genuinely shifted your thinking.
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (verdictPending && finalizationTimedOut) {
+    return (
+      <div className="min-h-screen bg-void px-6 py-16 flex items-center justify-center">
+        <div className="max-w-lg w-full border border-white/10 bg-surface/30 rounded-xl p-8 text-center">
+          <p className="text-path-risk text-[10px] font-mono uppercase tracking-[0.3em] mb-4">
+            Final synthesis
+          </p>
+          <h2 className="font-display text-lg text-ivory mb-3">The verdict is taking longer than it should.</h2>
+          <p className="text-ivory-dim text-sm leading-relaxed">
+            Your debate is saved. Try again to finish the final readout.
+          </p>
+          <button
+            onClick={() => { void handleRetryFinalization(); }}
+            disabled={retryingFinalization}
+            className="mt-6 px-6 py-3 rounded-lg text-sm border border-path-risk text-path-risk cursor-pointer transition-colors duration-200 hover:bg-path-risk hover:text-void disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none"
+          >
+            {retryingFinalization ? "Trying again\u2026" : "Try again"}
+          </button>
         </div>
       </div>
     );
