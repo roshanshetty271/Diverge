@@ -33,7 +33,12 @@ from app.orchestrator_checkpointed import (
 )
 from app.orchestrator import run_debate, run_debate_streaming, run_debate_token_streaming, set_interjection
 from app.security.rate_limiter import check_rate_limit
-from app.security.llm_security import sanitize_writing_samples, sanitize_user_input, detect_injection
+from app.security.llm_security import (
+    detect_injection,
+    sanitize_context_field,
+    sanitize_user_input,
+    sanitize_writing_samples,
+)
 from app.security.safety import detect_crisis, detect_blocked_topic, CRISIS_RESOURCES
 from app.security.cognito import ensure_debate_access, get_current_user
 from app.security.turnstile import require_turnstile_for_anonymous_start
@@ -69,6 +74,15 @@ def _log_debug_debate_input(label: str, user_context: dict):
         user_context.get("values"),
         len(user_context.get("writing_samples") or ""),
     )
+
+
+def _sanitize_context_fields(user_context: dict) -> dict:
+    """Screen every free-text field that reaches the prompts, in place."""
+    user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
+    user_context["financial_context"] = sanitize_context_field(user_context.get("financial_context") or "", 500)
+    user_context["constraints"] = sanitize_context_field(user_context.get("constraints") or "", 500)
+    user_context["values"] = sanitize_context_field(user_context.get("values") or "", 200)
+    return user_context
 
 
 def _hydrate_from_profile(user_context: dict, user: Optional[dict]) -> dict:
@@ -151,9 +165,7 @@ def start_debate(
 
     # 3. Sanitize all text fields
     user_context = _hydrate_from_profile(decision.model_dump(), user)
-    user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
-    user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
-    user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+    _sanitize_context_fields(user_context)
     _log_debug_debate_input("debate.stream.start", user_context)
     _log_debug_debate_input("debate.start", user_context)
 
@@ -215,9 +227,7 @@ def start_checkpointed_debate_route(
             )
 
     user_context = _hydrate_from_profile(decision.model_dump(), user)
-    user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
-    user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
-    user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+    _sanitize_context_fields(user_context)
     _log_debug_debate_input("debate.session.start", user_context)
 
     user_id = user["sub"] if user else "anonymous"
@@ -345,9 +355,7 @@ async def start_checkpointed_stream_route(
             )
 
     user_context = _hydrate_from_profile(decision.model_dump(), user)
-    user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
-    user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
-    user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+    _sanitize_context_fields(user_context)
     _log_debug_debate_input("debate.session.start-stream", user_context)
 
     user_id = user["sub"] if user else "anonymous"
@@ -479,9 +487,7 @@ async def stream_debate(
             raise HTTPException(status_code=400, detail="Your input contains patterns that can't be processed.")
 
     user_context = _hydrate_from_profile(decision.model_dump(), user)
-    user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
-    user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
-    user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+    _sanitize_context_fields(user_context)
 
     user_id = user["sub"] if user else "anonymous"
     logger.info(f"Starting streaming debate: '{decision.path_a}' vs '{decision.path_b}' by {user_id}")
@@ -586,9 +592,7 @@ async def stream_debate_tokens(
             raise HTTPException(status_code=400, detail="Your input contains patterns that can't be processed.")
 
     user_context = _hydrate_from_profile(decision.model_dump(), user)
-    user_context["writing_samples"] = sanitize_writing_samples(user_context.get("writing_samples") or "")
-    user_context["financial_context"] = sanitize_user_input(user_context.get("financial_context") or "")
-    user_context["constraints"] = sanitize_user_input(user_context.get("constraints") or "")
+    _sanitize_context_fields(user_context)
     _log_debug_debate_input("debate.stream_tokens.start", user_context)
 
     user_id = user["sub"] if user else "anonymous"

@@ -153,15 +153,34 @@ def sanitize_writing_samples(samples: str) -> str:
     if not samples:
         return ""
 
+    return _screen_free_text(samples, "writing sample")[:2000]
+
+
+def sanitize_context_field(text: str, max_length: int = 500) -> str:
+    """Sanitize a free-text context field (constraints, financial context, values).
+
+    These fields are interpolated into the debate system prompts, so they get
+    the same screening as writing samples: markup removed, known injection
+    patterns stripped, and prompt delimiter tags removed. Stripping (rather
+    than rejecting the request) avoids blocking ordinary sentences such as
+    "I act as a caregiver for my mom".
+    """
+    if not text:
+        return ""
+
+    return _screen_free_text(text, "context field")[:max_length]
+
+
+def _screen_free_text(text: str, label: str) -> str:
     # Sanitize XSS/HTML
-    cleaned = sanitize_user_input(samples)
+    cleaned = sanitize_user_input(text)
 
     # Strip injection patterns directly from the text
     injection_found = False
     for pattern in COMPILED_PATTERNS:
         match = pattern.search(cleaned)
         if match:
-            logger.warning(f"Stripping injection pattern from writing sample: '{match.group()}'")
+            logger.warning(f"Stripping injection pattern from {label}: '{match.group()}'")
             cleaned = pattern.sub("", cleaned)
             injection_found = True
 
@@ -176,8 +195,7 @@ def sanitize_writing_samples(samples: str) -> str:
     cleaned = re.sub(r"</?\w+_samples>", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"</?\w+_instruction\w*>", "", cleaned, flags=re.IGNORECASE)
 
-    # Enforce length limit
-    return cleaned[:2000]
+    return cleaned
 
 
 def validate_agent_output(output: str) -> str:
