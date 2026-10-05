@@ -4,12 +4,15 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.config import get_settings
 from app.data.template_catalog import get_template_catalog
 from app.db.dynamodb import (
+    DebateOwnershipError,
+    get_debate_owner,
     get_shared_debate,
     get_user_debates,
     save_debate,
@@ -28,7 +31,7 @@ from app.schemas import (
     ShareDebateRequest,
     TemplateResponse,
 )
-from app.security.cognito import require_auth
+from app.security.cognito import ensure_debate_access, get_current_user, require_auth
 from app.security.llm_security import sanitize_user_input, sanitize_writing_samples
 from app.security.rate_limiter import check_rate_limit
 
@@ -153,6 +156,8 @@ def save_debate_route(
         if user_input:
             upsert_user_profile(user_id, user_input)
         return {"status": "saved", "debate_id": debate_data["debate_id"]}
+    except DebateOwnershipError as e:
+        raise HTTPException(status_code=403, detail="This debate belongs to another account.") from e
     except Exception as e:
         logger.error("Save failed for user %s: %s", user_id, e)
         raise HTTPException(status_code=500, detail="Failed to save debate. Please try again.") from e
@@ -263,9 +268,22 @@ def health_check(request: Request):
 
 
 @router.post("/debate/{debate_id}/feedback")
-def submit_feedback(debate_id: str, req: FeedbackRequest, request: Request):
+def submit_feedback(
+    debate_id: str,
+    req: FeedbackRequest,
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user),
+):
     """Submit feedback on a debate verdict. Saves to DynamoDB and emails the builder."""
-    check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="feedback")
+    check_rate_limit(request, max_requests=5, window_seconds=3600, endpoint="feedback", user=user)
+
+    # Same rule as reading or continuing a session: a signed-in debate needs its owner.
+    try:
+        owner_id = get_debate_owner(debate_id)
+    except Exception as e:
+        logger.error("Owner lookup failed for feedback on %s", debate_id)
+        raise HTTPException(status_code=503, detail="The service is temporarily unavailable. Please try again.") from e
+    ensure_debate_access(owner_id, user)
 
     now = datetime.now(timezone.utc).isoformat()
     saved = save_debate_feedback(debate_id, req.rating, req.quote, now)

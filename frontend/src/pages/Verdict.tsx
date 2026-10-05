@@ -958,7 +958,7 @@ export default function Verdict() {
                         onClick={() => {
                           setFeedbackSubmitted(true);
                           if (debate?.debate_id) {
-                            submitFeedback(debate.debate_id, feedbackRating!, feedbackQuote).catch(() => {});
+                            submitFeedback(debate.debate_id, feedbackRating!, feedbackQuote, isAuthenticated ? token : null).catch(() => {});
                           }
                         }}
                         className="px-4 py-2 rounded-lg text-xs font-mono border border-path-risk text-path-risk hover:bg-path-risk hover:text-void transition-colors cursor-pointer"

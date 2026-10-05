@@ -23,7 +23,7 @@ from app.schemas import (
     DecisionInput,
     InterjectionRequest,
 )
-from app.db.dynamodb import get_debate_session, get_user_profile
+from app.db.dynamodb import get_debate_owner, get_debate_session, get_user_profile
 from app.orchestrator_checkpointed import (
     continue_checkpointed_debate,
     continue_checkpointed_streaming,
@@ -35,7 +35,7 @@ from app.orchestrator import run_debate, run_debate_streaming, run_debate_token_
 from app.security.rate_limiter import check_rate_limit
 from app.security.llm_security import sanitize_writing_samples, sanitize_user_input, detect_injection
 from app.security.safety import detect_crisis, detect_blocked_topic, CRISIS_RESOURCES
-from app.security.cognito import get_current_user
+from app.security.cognito import ensure_debate_access, get_current_user
 from app.security.turnstile import require_turnstile_for_anonymous_start
 from app.config import get_settings
 
@@ -254,9 +254,7 @@ def continue_checkpointed_debate_route(
     if not session:
         raise HTTPException(status_code=404, detail="Debate session not found.")
 
-    session_user_id = session.get("user_id", "anonymous")
-    if session_user_id != "anonymous" and (not user or user.get("sub") != session_user_id):
-        raise HTTPException(status_code=403, detail="You don't have access to this debate session.")
+    ensure_debate_access(session.get("user_id", "anonymous"), user)
 
     interjection = (body.interjection or "").strip()
     if interjection:
@@ -297,9 +295,7 @@ def get_checkpointed_debate_session_route(
     if not session:
         raise HTTPException(status_code=404, detail="Debate session not found.")
 
-    session_user_id = session.get("user_id", "anonymous")
-    if session_user_id != "anonymous" and (not user or user.get("sub") != session_user_id):
-        raise HTTPException(status_code=403, detail="You don't have access to this debate session.")
+    ensure_debate_access(session.get("user_id", "anonymous"), user)
 
     return _session_to_response(debate_id, session)
 
@@ -409,9 +405,7 @@ async def continue_checkpointed_stream_route(
     if not session:
         raise HTTPException(status_code=404, detail="Debate session not found.")
 
-    session_user_id = session.get("user_id", "anonymous")
-    if session_user_id != "anonymous" and (not user or user.get("sub") != session_user_id):
-        raise HTTPException(status_code=403, detail="You don't have access to this debate session.")
+    ensure_debate_access(session.get("user_id", "anonymous"), user)
 
     interjection = (body.interjection or "").strip()
     if interjection:
@@ -520,15 +514,27 @@ async def stream_debate(
 
 
 @router.post("/debate/interject")
-def interject_debate(req: InterjectionRequest, request: Request):
+def interject_debate(
+    req: InterjectionRequest,
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user),
+):
     """Submit a user interjection to be included in the next debate round.
 
     The interjection is picked up by the streaming orchestrator between rounds,
     influencing both agents' arguments in the following round.
     """
     _verify_origin(request)
-    check_rate_limit(request, max_requests=10, window_seconds=300, endpoint="interject:burst")
-    check_rate_limit(request, max_requests=60, window_seconds=3600, endpoint="interject")
+    check_rate_limit(request, max_requests=10, window_seconds=300, endpoint="interject:burst", user=user)
+    check_rate_limit(request, max_requests=60, window_seconds=3600, endpoint="interject", user=user)
+
+    # Debates that were saved by a signed-in user only accept that user's input.
+    try:
+        owner_id = get_debate_owner(req.debate_id)
+    except Exception:
+        logger.error("Owner lookup failed for interjection on %s", req.debate_id)
+        raise HTTPException(status_code=503, detail="The service is temporarily unavailable. Please try again.")
+    ensure_debate_access(owner_id, user)
 
     is_suspicious, pattern = detect_injection(req.text)
     if is_suspicious:

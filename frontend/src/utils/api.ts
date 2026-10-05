@@ -194,9 +194,16 @@ export async function reflectOnDebate(debateId: string, satisfaction: number, no
   });
 }
 
-export async function submitFeedback(debateId: string, rating: string, quote: string): Promise<{ status: string }> {
+export async function submitFeedback(
+  debateId: string,
+  rating: string,
+  quote: string,
+  token?: string | null,
+): Promise<{ status: string }> {
   return apiFetch<{ status: string }>(`${API_BASE}/api/debate/${debateId}/feedback`, {
     method: "POST",
     body: JSON.stringify({ rating, quote }),
+    // Debates saved to an account only accept feedback from that account.
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
 }

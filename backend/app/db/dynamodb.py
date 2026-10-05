@@ -18,6 +18,10 @@ class SessionConflictError(Exception):
     """A conditional session write lost to a concurrent request."""
 
 
+class DebateOwnershipError(Exception):
+    """The debate id already belongs to a different user."""
+
+
 def _is_conditional_failure(exc: Exception) -> bool:
     return (
         isinstance(exc, ClientError)
@@ -86,12 +90,38 @@ def save_debate(debate_id: str, user_id: str, user_input: dict, debate_data: dic
     }
 
     try:
-        table.put_item(Item=_to_dynamodb_compatible(item))
+        # The debate id comes from the client: only create it, replace the
+        # caller's own item, or claim an anonymous session item.
+        table.put_item(
+            Item=_to_dynamodb_compatible(item),
+            ConditionExpression="attribute_not_exists(debate_id) OR user_id = :uid OR user_id = :anonymous",
+            ExpressionAttributeValues={":uid": user_id, ":anonymous": "anonymous"},
+        )
         logger.info(f"Saved debate {debate_id} for user {user_id}")
         return item
     except Exception as e:
+        if _is_conditional_failure(e):
+            logger.warning("Refused to overwrite debate %s owned by another user", debate_id)
+            raise DebateOwnershipError(debate_id) from e
         logger.error(f"Failed to save debate {debate_id}: {e}")
         raise
+
+
+def get_debate_owner(debate_id: str) -> str | None:
+    """Return the owner of a stored debate item, "anonymous" if it has none, or None if absent.
+
+    Errors propagate so callers can fail closed.
+    """
+    settings = get_settings()
+    table = _get_table(settings.debates_table)
+    response = table.get_item(
+        Key={"debate_id": debate_id},
+        ProjectionExpression="user_id",
+    )
+    item = response.get("Item")
+    if item is None:
+        return None
+    return item.get("user_id") or "anonymous"
 
 
 def get_user_debates(user_id: str, limit: int = 50, last_key: dict | None = None) -> dict:
