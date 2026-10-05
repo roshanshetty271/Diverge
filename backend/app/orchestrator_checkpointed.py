@@ -6,6 +6,7 @@ import uuid
 
 from app.agents.prompts import detect_decision_category, get_rounds
 from app.db.dynamodb import (
+    SessionConflictError,
     complete_debate_session,
     create_debate_session,
     get_debate_session,
@@ -103,6 +104,54 @@ def _session_to_response(debate_id: str, session: dict) -> CheckpointedDebateRes
         next_round_number=next_round_number,
         finalization_progress=finalization_progress,
     )
+
+
+def _is_duplicate_request(session: dict, round_number: int | None) -> bool:
+    """True when the client asked for a round that has already been generated."""
+    if round_number is None:
+        return False
+    current_round_index = int(session.get("current_round_index", len(session.get("transcript", []) or [])))
+    if round_number > current_round_index + 1:
+        raise ValueError("That round isn't ready yet.")
+    return round_number <= current_round_index
+
+
+def _replay_session_events(debate_id: str, session: dict, round_number: int | None = None):
+    """Yield the stored state as SSE events so a duplicate request sees the round that won."""
+    response = _session_to_response(debate_id, session)
+    transcript = response.transcript
+    if round_number is None:
+        round_number = len(transcript)
+    if 0 < round_number <= len(transcript):
+        yield {
+            "type": "round_complete",
+            "round": round_number,
+            "data": transcript[round_number - 1].model_dump(),
+        }
+    yield {
+        "type": "session_update",
+        "status": response.status,
+        "debate_id": debate_id,
+        "completed_rounds": response.completed_rounds,
+        "total_rounds": response.total_rounds,
+        "next_round_number": response.next_round_number,
+        "verdict_ready": bool(response.verdict),
+    }
+    if response.status == "complete" and response.verdict:
+        yield {
+            "type": "complete",
+            "verdict": response.verdict,
+            "timeline": response.timeline.model_dump() if response.timeline else None,
+            "debate_id": debate_id,
+            "metrics": [m.model_dump() if m else None for m in response.metrics],
+            "completed_rounds": response.completed_rounds,
+            "total_rounds": response.total_rounds,
+            "resources": [r.model_dump() for r in response.resources],
+        }
+
+
+def _latest_session(debate_id: str, fallback: dict) -> dict:
+    return get_debate_session(debate_id) or fallback
 
 
 def _build_partial_verdict(transcript: list[RoundResult], user_context: dict, total_rounds: int) -> str:
@@ -268,8 +317,17 @@ def start_checkpointed_debate(user_context: dict, user_id: str = "anonymous") ->
     )
 
 
-def continue_checkpointed_debate(debate_id: str, interjection: str | None = None) -> CheckpointedDebateResponse:
-    """Run exactly one additional round for a paused debate session."""
+def continue_checkpointed_debate(
+    debate_id: str,
+    interjection: str | None = None,
+    round_number: int | None = None,
+) -> CheckpointedDebateResponse:
+    """Run exactly one additional round for a paused debate session.
+
+    Idempotent: a duplicate request (same `round_number`, or one that loses the
+    conditional write to a concurrent request) returns the stored round instead
+    of generating and saving a second version of it.
+    """
     session = get_debate_session(debate_id)
     if not session:
         raise ValueError("Debate session not found.")
@@ -278,6 +336,9 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
         return _session_to_response(debate_id, session)
 
     if session.get("status") == "finalizing":
+        return _session_to_response(debate_id, session)
+
+    if _is_duplicate_request(session, round_number):
         return _session_to_response(debate_id, session)
 
     user_context = dict(session.get("input", {}) or {})
@@ -331,6 +392,24 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
 
     if next_round_index >= len(rounds):
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        try:
+            update_debate_session(
+                debate_id,
+                {
+                    "status": "finalizing",
+                    "current_round_index": next_round_index,
+                    "transcript": _serialize_models(transcript),
+                    "metrics": _serialize_models(metrics),
+                    "debate_summary": debate_summary,
+                    "prev_beta": prev_beta,
+                    "total_rounds": len(rounds),
+                    "interjections": list(interjections_history),
+                },
+                expected_round_index=current_round_index,
+            )
+        except SessionConflictError:
+            return _session_to_response(debate_id, _latest_session(debate_id, session))
 
         timeline_active = completed_rounds >= 3
         progress: dict[str, str] = {
@@ -392,19 +471,23 @@ def continue_checkpointed_debate(debate_id: str, interjection: str | None = None
             finalization_progress=FinalizationProgress(**progress),
         )
 
-    update_debate_session(
-        debate_id,
-        {
-            "status": "paused",
-            "current_round_index": next_round_index,
-            "transcript": _serialize_models(transcript),
-            "metrics": _serialize_models(metrics),
-            "debate_summary": debate_summary,
-            "prev_beta": prev_beta,
-            "total_rounds": len(rounds),
-            "interjections": list(interjections_history),
-        },
-    )
+    try:
+        update_debate_session(
+            debate_id,
+            {
+                "status": "paused",
+                "current_round_index": next_round_index,
+                "transcript": _serialize_models(transcript),
+                "metrics": _serialize_models(metrics),
+                "debate_summary": debate_summary,
+                "prev_beta": prev_beta,
+                "total_rounds": len(rounds),
+                "interjections": list(interjections_history),
+            },
+            expected_round_index=current_round_index,
+        )
+    except SessionConflictError:
+        return _session_to_response(debate_id, _latest_session(debate_id, session))
 
     return CheckpointedDebateResponse(
         status="paused",
@@ -500,7 +583,11 @@ def start_checkpointed_streaming(user_context: dict, user_id: str = "anonymous")
     }
 
 
-def continue_checkpointed_streaming(debate_id: str, interjection: str | None = None):
+def continue_checkpointed_streaming(
+    debate_id: str,
+    interjection: str | None = None,
+    round_number: int | None = None,
+):
     """Generator that streams one round of a checkpointed debate via SSE events.
 
     Yields the same event types as run_debate_token_streaming():
@@ -508,13 +595,17 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
 
     For non-final rounds: yields session_update after round_complete.
     For the final round: generates verdict/timeline/resources synchronously, then yields complete.
+
+    The round is saved with a conditional write before `round_complete` is
+    sent. A duplicate request replays the stored round instead of saving its own.
     """
     session = get_debate_session(debate_id)
     if not session:
         raise ValueError("Debate session not found.")
 
-    if session.get("status") == "complete":
-        raise ValueError("Debate session is already complete.")
+    if session.get("status") in ("complete", "finalizing") or _is_duplicate_request(session, round_number):
+        yield from _replay_session_events(debate_id, session, round_number)
+        return
 
     user_context = dict(session.get("input", {}) or {})
     category = session.get("category", "general")
@@ -540,7 +631,7 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
 
     round_info = rounds[current_round_index]
 
-    result, debate_summary = yield from _stream_single_round(
+    round_events = _stream_single_round(
         round_index=current_round_index,
         round_info=round_info,
         user_context=user_context,
@@ -552,6 +643,18 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
         alpha_persona=alpha_persona,
         beta_persona=beta_persona,
     )
+    round_complete_event = None
+    while True:
+        try:
+            event = next(round_events)
+        except StopIteration as stop:
+            result, debate_summary = stop.value
+            break
+        if event.get("type") == "round_complete":
+            # Hold until the round is saved, so a losing duplicate never reports it.
+            round_complete_event = event
+            continue
+        yield event
 
     transcript.append(result)
     metrics.append(result.metrics)
@@ -562,22 +665,32 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
     completed_rounds = len([r for r in transcript if r.status == "completed"])
 
     if next_round_index >= len(rounds):
-        update_debate_session(
-            debate_id,
-            {
-                "status": "finalizing",
-                "current_round_index": next_round_index,
-                "transcript": _serialize_models(transcript),
-                "metrics": _serialize_models(metrics),
-                "debate_summary": debate_summary,
-                "prev_beta": prev_beta,
-                "verdict": "",
-                "timeline": None,
-                "resources": [],
-                "total_rounds": len(rounds),
-                "interjections": list(interjections_history),
-            },
-        )
+        try:
+            update_debate_session(
+                debate_id,
+                {
+                    "status": "finalizing",
+                    "current_round_index": next_round_index,
+                    "transcript": _serialize_models(transcript),
+                    "metrics": _serialize_models(metrics),
+                    "debate_summary": debate_summary,
+                    "prev_beta": prev_beta,
+                    "verdict": "",
+                    "timeline": None,
+                    "resources": [],
+                    "total_rounds": len(rounds),
+                    "interjections": list(interjections_history),
+                },
+                expected_round_index=current_round_index,
+            )
+        except SessionConflictError:
+            yield from _replay_session_events(
+                debate_id, _latest_session(debate_id, session), current_round_index + 1,
+            )
+            return
+
+        if round_complete_event:
+            yield round_complete_event
 
         threading.Thread(
             target=_finalize_checkpointed_session_bundle,
@@ -604,19 +717,29 @@ def continue_checkpointed_streaming(debate_id: str, interjection: str | None = N
             "verdict_ready": False,
         }
     else:
-        update_debate_session(
-            debate_id,
-            {
-                "status": "paused",
-                "current_round_index": next_round_index,
-                "transcript": _serialize_models(transcript),
-                "metrics": _serialize_models(metrics),
-                "debate_summary": debate_summary,
-                "prev_beta": prev_beta,
-                "total_rounds": len(rounds),
-                "interjections": list(interjections_history),
-            },
-        )
+        try:
+            update_debate_session(
+                debate_id,
+                {
+                    "status": "paused",
+                    "current_round_index": next_round_index,
+                    "transcript": _serialize_models(transcript),
+                    "metrics": _serialize_models(metrics),
+                    "debate_summary": debate_summary,
+                    "prev_beta": prev_beta,
+                    "total_rounds": len(rounds),
+                    "interjections": list(interjections_history),
+                },
+                expected_round_index=current_round_index,
+            )
+        except SessionConflictError:
+            yield from _replay_session_events(
+                debate_id, _latest_session(debate_id, session), current_round_index + 1,
+            )
+            return
+
+        if round_complete_event:
+            yield round_complete_event
 
         yield {
             "type": "session_update",

@@ -8,9 +8,21 @@ import logging
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+class SessionConflictError(Exception):
+    """A conditional session write lost to a concurrent request."""
+
+
+def _is_conditional_failure(exc: Exception) -> bool:
+    return (
+        isinstance(exc, ClientError)
+        and exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException"
+    )
 
 # GSI name defined in template.yaml
 USER_DEBATES_INDEX = "user-debates-index"
@@ -202,8 +214,17 @@ def get_debate_session(debate_id: str) -> dict | None:
         return None
 
 
-def update_debate_session(debate_id: str, session_data: dict) -> dict:
-    """Update a checkpointed debate session item."""
+def update_debate_session(
+    debate_id: str,
+    session_data: dict,
+    expected_round_index: int | None = None,
+) -> dict:
+    """Update a checkpointed debate session item.
+
+    With `expected_round_index`, the write only succeeds if the stored
+    `current_round_index` still equals it; otherwise SessionConflictError is
+    raised so a duplicate request cannot overwrite a round that already landed.
+    """
     settings = get_settings()
     table = _get_table(settings.debates_table)
     now = datetime.now(timezone.utc)
@@ -220,16 +241,31 @@ def update_debate_session(debate_id: str, session_data: dict) -> dict:
             "updated_at": now.isoformat(),
             "ttl": int((now + timedelta(days=7)).timestamp()),
         }
-        table.put_item(Item=_to_dynamodb_compatible(item))
+        put_kwargs: dict = {"Item": _to_dynamodb_compatible(item)}
+        if expected_round_index is not None:
+            put_kwargs["ConditionExpression"] = "current_round_index = :expected"
+            put_kwargs["ExpressionAttributeValues"] = {":expected": expected_round_index}
+        table.put_item(**put_kwargs)
         return item
     except Exception as e:
+        if _is_conditional_failure(e):
+            logger.info("Session %s already advanced past round index %s", debate_id, expected_round_index)
+            raise SessionConflictError(debate_id) from e
         logger.error(f"Failed to update session {debate_id}: {e}")
         raise
 
 
-def complete_debate_session(debate_id: str, session_data: dict) -> dict:
+def complete_debate_session(
+    debate_id: str,
+    session_data: dict,
+    expected_round_index: int | None = None,
+) -> dict:
     """Mark a checkpointed session complete."""
-    return update_debate_session(debate_id, {"status": "complete", **session_data})
+    return update_debate_session(
+        debate_id,
+        {"status": "complete", **session_data},
+        expected_round_index=expected_round_index,
+    )
 
 
 def create_checkin_records(records: list[dict]) -> int:

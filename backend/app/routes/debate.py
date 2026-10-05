@@ -271,7 +271,7 @@ def continue_checkpointed_debate_route(
             logger.info("[debug-trace] debate.session.continue | debate_id=%s interjection=%r", debate_id, interjection)
 
     try:
-        return continue_checkpointed_debate(debate_id, interjection or None)
+        return continue_checkpointed_debate(debate_id, interjection or None, body.round_number)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception:
@@ -428,7 +428,7 @@ async def continue_checkpointed_stream_route(
 
         def worker():
             try:
-                for event in continue_checkpointed_streaming(debate_id, interjection or None):
+                for event in continue_checkpointed_streaming(debate_id, interjection or None, body.round_number):
                     q.put(event)
             except Exception as e:
                 q.put({"type": "error", "message": str(e)})
