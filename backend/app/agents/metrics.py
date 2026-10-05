@@ -77,7 +77,7 @@ def _extract_openai(debate_text: str) -> RoundMetrics:
     if _openai_client is None:
         from openai import OpenAI
         settings = get_settings()
-        _openai_client = OpenAI(api_key=settings.openai_api_key)
+        _openai_client = OpenAI(**settings.openai_client_args())
 
     settings = get_settings()
     response = _openai_client.chat.completions.create(

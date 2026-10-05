@@ -173,6 +173,19 @@ def _iter_stream_events_for_text(
         yield payload
 
 
+def _round_deadline() -> float:
+    """Monotonic time by which the current round must stop starting new work."""
+    return time.monotonic() + get_settings().round_deadline_seconds
+
+
+def _has_time_for_attempt(deadline: float | None, extra_wait: float = 0.0) -> bool:
+    """True if a new generation (after waiting `extra_wait`) can still finish before the deadline."""
+    if deadline is None:
+        return True
+    remaining = deadline - time.monotonic() - extra_wait
+    return remaining >= get_settings().min_attempt_seconds
+
+
 def _generate_with_guardrails(
     *,
     user_ctx: dict,
@@ -184,8 +197,13 @@ def _generate_with_guardrails(
     generator: Callable[[str], str],
     path_a: str | None = None,
     path_b: str | None = None,
+    deadline: float | None = None,
 ) -> str:
-    """Run generation with validation, corrective rewrite, and strict fallback."""
+    """Run generation with validation, corrective rewrite, and strict fallback.
+
+    No generation or rewrite is started once the round deadline is too close;
+    the fallback text is returned instead.
+    """
     prior_texts = _validated_transcript_texts(transcript)
     if extra_prior_texts:
         prior_texts.extend(extra_prior_texts)
@@ -193,6 +211,12 @@ def _generate_with_guardrails(
     debate_id = user_ctx.get("debate_id")
 
     for attempt in range(3):
+        if not _has_time_for_attempt(deadline):
+            logger.warning(
+                "Round deadline reached before attempt %s for stage=%s debate_id=%s",
+                attempt + 1, stage_label, debate_id,
+            )
+            break
         text = generator(rewrite_instruction).strip()
         if not text:
             rewrite_instruction = strict_grounding_rewrite_brief()
@@ -414,7 +438,7 @@ def _make_model(
     if s.model_provider == "openai":
         from strands.models.openai import OpenAIModel
         return OpenAIModel(
-            client_args={"api_key": s.openai_api_key},
+            client_args=s.openai_client_args(),
             model_id=s.debate_model_id,
             params={"max_tokens": tokens, "temperature": temp},
         )
@@ -762,7 +786,7 @@ def _generate_structured_timeline(transcript: list[RoundResult], user_ctx: dict)
             if settings.model_provider == "openai":
                 from openai import OpenAI
 
-                client = OpenAI(api_key=settings.openai_api_key)
+                client = OpenAI(**settings.openai_client_args())
                 completion = client.beta.chat.completions.parse(
                     model=settings.debate_model_id,
                     temperature=0.4,
@@ -820,9 +844,10 @@ def _run_round(
     beta_persona: dict,
     interjection: str | None = None,
 ) -> RoundResult:
-    """Execute one debate round with smart retry logic."""
+    """Execute one debate round with smart retry logic, within the round deadline."""
     alpha_response = ""
     beta_response = ""
+    deadline = _round_deadline()
 
     for attempt in range(MAX_RETRIES):
         try:
@@ -860,6 +885,7 @@ def _run_round(
                 transcript=transcript,
                 content_kind="round",
                 stage_label=f"round_{round_num + 1}.alpha",
+                deadline=deadline,
                 fallback_text=_build_round_fallback_text(
                     path_a,
                     timeline,
@@ -905,6 +931,7 @@ def _run_round(
                 extra_prior_texts=[alpha_response],
                 content_kind="round",
                 stage_label=f"round_{round_num + 1}.beta",
+                deadline=deadline,
                 fallback_text=_build_round_fallback_text(
                     path_b,
                     timeline,
@@ -957,6 +984,9 @@ def _run_round(
 
             if attempt < MAX_RETRIES - 1:
                 delay = _backoff_with_jitter(attempt)
+                if not _has_time_for_attempt(deadline, delay):
+                    logger.warning(f"Round {round_num + 1}: no time left for a retry before the deadline")
+                    break
                 logger.info(f"Retrying round {round_num + 1} in {delay:.1f}s...")
                 time.sleep(delay)
 
@@ -1214,6 +1244,7 @@ def _run_round_split(
     behavioral difference is that alpha no longer waits for beta before being
     returned to the caller.
     """
+    deadline = _round_deadline()
     chronology_guardrail = _build_chronology_guardrail(user_ctx, round_info, round_num)
     alpha_system_prompt = _build_round_system_prompt(
         build_alpha_prompt(user_ctx, round_info, alpha_persona),
@@ -1252,6 +1283,7 @@ def _run_round_split(
                 transcript=transcript,
                 content_kind="round",
                 stage_label=f"round_{round_num + 1}.alpha",
+                deadline=deadline,
                 fallback_text=_build_round_fallback_text(
                     path_a,
                     timeline,
@@ -1282,6 +1314,9 @@ def _run_round_split(
                 break
             if attempt < MAX_RETRIES - 1:
                 delay = _backoff_with_jitter(attempt)
+                if not _has_time_for_attempt(deadline, delay):
+                    logger.warning(f"Round {round_num + 1} alpha: no time left for a retry before the deadline")
+                    break
                 logger.info(f"Retrying round {round_num + 1} alpha in {delay:.1f}s...")
                 time.sleep(delay)
 
@@ -1317,6 +1352,7 @@ def _run_round_split(
                     extra_prior_texts=[alpha_response],
                     content_kind="round",
                     stage_label=f"round_{round_num + 1}.beta",
+                    deadline=deadline,
                     fallback_text=_build_round_fallback_text(
                         path_b,
                         timeline,
@@ -1347,6 +1383,9 @@ def _run_round_split(
                     break
                 if attempt < MAX_RETRIES - 1:
                     delay = _backoff_with_jitter(attempt)
+                    if not _has_time_for_attempt(deadline, delay):
+                        logger.warning(f"Round {round_num + 1} beta: no time left for a retry before the deadline")
+                        break
                     logger.info(f"Retrying round {round_num + 1} beta in {delay:.1f}s...")
                     time.sleep(delay)
 

@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     debate_model_id: str = "gpt-4o-mini"
     metrics_model_id: str = "gpt-4o-mini"
 
+    # Time limits. The debate Lambda has 300 s per request, so a round stops
+    # starting new generations or retries once it can't finish them in time.
+    model_timeout_seconds: float = 60.0  # per OpenAI request
+    model_max_retries: int = 1  # OpenAI client-level retries
+    round_deadline_seconds: float = 150.0  # budget for one debate round
+    min_attempt_seconds: float = 30.0  # don't start a generation with less time left
+
     # Model parameters
     debate_temperature: float = 0.75
     debate_max_tokens: int = 1024
@@ -93,6 +100,14 @@ class Settings(BaseSettings):
     agentcore_memory_id: str = ""
 
     model_config = {"env_file": ".env", "env_prefix": "DIVERGE_"}
+
+    def openai_client_args(self) -> dict:
+        """Keyword arguments for every OpenAI client: explicit timeout and bounded retries."""
+        return {
+            "api_key": self.openai_api_key,
+            "timeout": self.model_timeout_seconds,
+            "max_retries": self.model_max_retries,
+        }
 
     def get_all_cors_origins(self) -> list[str]:
         """Return CORS origins including CloudFront URL if configured."""
